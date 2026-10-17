@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "scenario_id": "20260917T140421-scenario-1",
+  "scenario_name": "Checkout with Cash on Delivery",
+  "intent": "Complete the recorded checkout using the Cash on Delivery payment option.",
+  "actor_role": "unknown (not captured)",
+  "environment": "demowebshop.tricentis.com public demo; captured observation only",
+  "fixture_alias": "CHECKOUT_TEST_ACCOUNT (placeholder; provision a disposable account/cart before replay)",
+  "starting_state": "The cart and checkout details were already populated. In the recorded flow, Cash on Delivery was selected before payment info and order confirmation.",
+  "selected_variants": {
+    "payment_method": "Payments.CashOnDelivery"
+  },
+  "field_constraints": [],
+  "expected_assertions": [
+    "Captured POST_checkout_OpcSavePaymentMethod returned HTTP 200 and its response included goto_section=payment_info.",
+    "Captured POST_checkout_OpcConfirmOrder returned HTTP 200 and the browser navigated to /checkout/completed/."
+  ],
+  "side_effects": [
+    "Submitting the final step places an order; this is a mutating action."
+  ],
+  "replay_risk": "mutating"
+}

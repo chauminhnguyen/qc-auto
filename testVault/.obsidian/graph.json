@@ -1,0 +1,81 @@
+{
+  "colorGroups": [
+    {
+      "query": "tag:#api",
+      "color": {
+        "a": 1,
+        "rgb": 3900150
+      }
+    },
+    {
+      "query": "tag:#param",
+      "color": {
+        "a": 1,
+        "rgb": 16096779
+      }
+    },
+    {
+      "query": "path:BRDs",
+      "color": {
+        "a": 1,
+        "rgb": 9135350
+      }
+    },
+    {
+      "query": "tag:#flow",
+      "color": {
+        "a": 1,
+        "rgb": 1355942
+      }
+    },
+    {
+      "query": "path:Reports/native_runs",
+      "color": {
+        "a": 1,
+        "rgb": 15485081
+      }
+    },
+    {
+      "query": "path:Screenshots",
+      "color": {
+        "a": 1,
+        "rgb": 10066329
+      }
+    },
+    {
+      "query": "path:Knowledge/Reviewed",
+      "color": {
+        "a": 1,
+        "rgb": 2278750
+      }
+    },
+    {
+      "query": "path:Knowledge/_inbox",
+      "color": {
+        "a": 1,
+        "rgb": 16347926
+      }
+    },
+    {
+      "query": "path:Knowledge/Changes",
+      "color": {
+        "a": 1,
+        "rgb": 15680580
+      }
+    },
+    {
+      "query": "path:Knowledge/Reports",
+      "color": {
+        "a": 1,
+        "rgb": 440020
+      }
+    },
+    {
+      "query": "path:Knowledge/QUESTIONS.md",
+      "color": {
+        "a": 1,
+        "rgb": 15337224
+      }
+    }
+  ]
+}

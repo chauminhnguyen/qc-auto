@@ -1,0 +1,2 @@
+The apparel page should only have 2 pages
+the subscribe button must be gray and black text

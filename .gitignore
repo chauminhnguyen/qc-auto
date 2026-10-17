@@ -1,0 +1,27 @@
+/.env
+__pycache__/
+*.py[cod]
+.env
+# Local environments and caches
+/.venv/
+/env/
+.pytest_cache/
+# Captured and generated data
+/a/
+/BRDs/
+/ObsidianVault/
+/testVault3/
+/jira_tickets/
+/_archive/
+/out/
+# Local databases, run outputs, and exports
+*.sqlite
+*.sqlite3
+/captured.jsonl
+/usage_log.jsonl
+/log.log
+/cmd.txt
+/files.zip
+/testcases.xlsx
+/.testcase_gen_brd_progress.json
+/.testcase_gen_cache.json

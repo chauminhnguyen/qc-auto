@@ -1,0 +1,39 @@
+# Proposed rules from the initial vault inspection. Confirm these before using
+# any model-backed command. Keep OPENROUTER_API_KEY in the environment only.
+vault: ./ObsidianVault
+types:
+  segment: {folder: "BRDs/raw/"}
+  api: {tag: "api"}
+  param: {tag: "param"}
+classification_confirmed: false
+embed:
+  model: ""
+  batch_size: 64
+  query_prefix: ""
+  doc_prefix: ""
+judge:
+  model: ""
+  temperature: 0
+  max_candidates: 8
+  concurrency: 8
+  max_calls: 0
+retrieval:
+  top_k: 10
+  drop_below: 0.35
+stoplist_params: [id, name, type, status]
+provider:
+  zdr: true
+  data_collection: deny
+key_normalization:
+  numeric_segments: true
+  uuid_segments: true
+  patterns: []
+sync:
+  brd_dir: ./BRDs
+  evidence_dir: ./ObsidianVault/Reports/native_runs
+  capture_db: ./ObsidianVault/.capture_index/index.sqlite
+  state_db: .capture_index/brd_linker_sync.sqlite
+  rename_threshold: 0.85
+  stale_after_runs: 2
+  max_delete_fraction: 0.20
+

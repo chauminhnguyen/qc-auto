@@ -1,0 +1,15 @@
+{
+  "_comment": "USD per 1,000,000 tokens. Copy this file to pricing.json and fill in prices from each provider's pricing page. null = unknown, so cost shows as n/a. Key format: provider/model, exactly as you pass them to record_response(). 'provider/*' matches any model of that provider.",
+  "ollama/*": {
+    "input_per_mtok": 0,
+    "output_per_mtok": 0
+  },
+  "openrouter/<vendor>/<model>": {
+    "input_per_mtok": null,
+    "output_per_mtok": null
+  },
+  "anthropic/<model-id>": {
+    "input_per_mtok": null,
+    "output_per_mtok": null
+  }
+}
