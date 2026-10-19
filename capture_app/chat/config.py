@@ -45,9 +45,26 @@ class ChatConfig:
         load_project_env()
         vault = Path(vault_path or os.environ.get("CAPTURE_VAULT_PATH", "./ObsidianVault")).resolve()
         provider = overrides.pop("provider", None) or os.environ.get("CHAT_PROVIDER", "local")
-        model = overrides.pop("model", None) or os.environ.get("CHAT_MODEL", "llama3.1")
-        api_base = overrides.pop("api_base", None) or os.environ.get("CHAT_API_BASE", "http://127.0.0.1:11434/v1/chat/completions")
-        api_key = overrides.pop("api_key", None) or os.environ.get("CHAT_API_KEY", os.environ.get("OPENROUTER_API_KEY", ""))
+        provider = provider.lower()
+        model = overrides.pop("model", None) or os.environ.get("CHAT_MODEL")
+        if not model:
+            if provider == "anthropic":
+                model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+            elif provider == "openrouter":
+                model = os.environ.get("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
+            else:
+                model = "llama3.1"
+
+        default_api_base = {
+            "local": "http://127.0.0.1:11434/v1/chat/completions",
+            "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+            "anthropic": "https://api.anthropic.com/v1/messages",
+        }.get(provider, "http://127.0.0.1:11434/v1/chat/completions")
+        api_base = overrides.pop("api_base", None) or os.environ.get("CHAT_API_BASE", default_api_base)
+        api_key = overrides.pop("api_key", None) or os.environ.get("CHAT_API_KEY")
+        if not api_key:
+            key_env = "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENROUTER_API_KEY"
+            api_key = os.environ.get(key_env, "")
         temperature_value = overrides.pop("temperature", None)
         max_tokens_value = overrides.pop("max_tokens", None)
         temperature = float(

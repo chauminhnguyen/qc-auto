@@ -365,6 +365,10 @@ def main():
     crawl_p.add_argument("--session", default=None)
     crawl_p.add_argument("--allow-submit", action="store_true")
     crawl_p.add_argument("--allow-delete", action="store_true")
+    crawl_p.add_argument(
+        "--interactive", action="store_true",
+        help="open a visible browser and wait for manual login/CAPTCHA before crawling",
+    )
     crawl_p.add_argument("--crawl-id", default=None, help="defaults to a timestamp")
 
     find_p = sub.add_parser("find", help="find how to reach a param from the frontend")
@@ -388,6 +392,7 @@ def main():
             max_depth=10,
             max_actions=150,
             verbose=True,
+            interactive=args.interactive,
         )
         start_url, _ = crawler.seed()
         transitions = crawler.crawl()

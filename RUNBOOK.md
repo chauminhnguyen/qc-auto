@@ -38,6 +38,16 @@ python -m capture_app.chat.cli ask --vault .\ObsidianVault "What happens when a 
 
 `capture.py` writes captured API/session data to `.capture_index\index.sqlite` and renders Markdown notes under `APIs`, `Params`, and `Flows`. `build-index` refreshes the separate `.chat_index\index.sqlite`; run it after capture before asking about new data.
 
+To use Anthropic directly for `chat.cli ask`, set these values in the project `.env`:
+
+```dotenv
+CHAT_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your-anthropic-console-key
+ANTHROPIC_MODEL=claude-sonnet-5
+```
+
+Then run the same `ask` command. `CHAT_PROVIDER` selects the chat CLI provider; `LLM_PROVIDER` separately selects the provider for BRD linking and testcase generation. The chat CLI sends Anthropic requests to its Messages API.
+
 ### B. Build or refresh the Obsidian graph nodes
 
 There is no separate "build nodes" command. Capture and crawler workflows create the Markdown notes that Obsidian treats as nodes. `VaultWriter` also maintains `.obsidian\graph.json` with colors for API and parameter tags.

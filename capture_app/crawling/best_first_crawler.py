@@ -70,7 +70,8 @@ class BestFirstCrawler(HeadlessCrawler):
                  plateau: int = 60, explore_c: float = 0.7, gamma: float = 0.5,
                  cluster_cap: int = 2, fold_threshold: float | None = 0.9,
                  max_pending: int = 6, time_budget_s: float | None = None,
-                 commit_reserve: int = 3, rng_seed: int = 0, **kwargs):
+                 commit_reserve: int = 3, rng_seed: int = 0,
+                 interactive: bool = False, **kwargs):
         # NOTE: actions_per_state (inherited) is unused here; k_per_visit and
         # cluster_cap replace it. max_states now caps nodes, so raise it (~60).
         super().__init__(*args, **kwargs)
@@ -83,6 +84,7 @@ class BestFirstCrawler(HeadlessCrawler):
         self.fold_threshold = fold_threshold
         self.max_pending = max_pending      # force a clean replay after this many same-screen actions
         self.time_budget_s = time_budget_s
+        self.interactive = interactive
         # FIX (sibling commit-button starvation, see _pick() below): was a
         # single held_commit slot; raised to a small reserved pool so a
         # product tile's several distinct commit buttons (Add to cart /
@@ -303,14 +305,15 @@ class BestFirstCrawler(HeadlessCrawler):
 
         with sync_playwright() as p:
             try:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(headless=not self.interactive)
             except PlaywrightError as bundled_error:
                 # Prefer the installed Edge/Chrome channel when the matching
                 # Playwright-managed browser binary has not been downloaded.
                 browser = None
                 for channel in ("msedge", "chrome"):
                     try:
-                        browser = p.chromium.launch(channel=channel, headless=True)
+                        browser = p.chromium.launch(
+                            channel=channel, headless=not self.interactive)
                         self._log(
                             f"Playwright Chromium unavailable; using installed {channel} browser"
                         )
@@ -324,6 +327,15 @@ class BestFirstCrawler(HeadlessCrawler):
 
             page.goto(start_url)
             self._settle(page)
+            if self.interactive:
+                self._log(
+                    "Complete any login or CAPTCHA in the browser, then press Enter here to crawl."
+                )
+                try:
+                    input()
+                except EOFError:
+                    self._log("no interactive input available; continuing with current page")
+                self._settle(page)
             items = self._snapshot(page)
             if not items:
                 self._log("snapshot empty -- retrying once after 3s")
