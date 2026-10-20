@@ -362,12 +362,19 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     crawl_p = sub.add_parser("crawl", help="run the crawler and persist its discoveries")
+    # Also accept --vault after the subcommand, as in the documented crawl
+    # command shape, without overriding the root parser's value when omitted.
+    crawl_p.add_argument("--vault", default=argparse.SUPPRESS)
     crawl_p.add_argument("--session", default=None)
     crawl_p.add_argument("--allow-submit", action="store_true")
     crawl_p.add_argument("--allow-delete", action="store_true")
     crawl_p.add_argument(
+        "--auth-state", default=None,
+        help="Playwright storage-state JSON; skips the manual login pause",
+    )
+    crawl_p.add_argument(
         "--interactive", action="store_true",
-        help="open a visible browser and wait for manual login/CAPTCHA before crawling",
+        help="ask for approval before each crawler action",
     )
     crawl_p.add_argument("--crawl-id", default=None, help="defaults to a timestamp")
 
@@ -393,6 +400,7 @@ def main():
             max_actions=150,
             verbose=True,
             interactive=args.interactive,
+            auth_state=args.auth_state,
         )
         start_url, _ = crawler.seed()
         transitions = crawler.crawl()

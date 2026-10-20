@@ -1,0 +1,48 @@
+{
+  "allowlist_added": [],
+  "never_added": [],
+  "pending_questions": [
+    {
+      "method": "POST",
+      "pattern": "POST demowebshop.tricentis.com/addproducttocart/catalog/{id}/{id}/{id}",
+      "url": "https://demowebshop.tricentis.com/addproducttocart/catalog/2/1/1",
+      "triggers": [
+        "https://demowebshop.tricentis.com/ | Click \"Add to cart\"",
+        "https://demowebshop.tricentis.com/gift-cards | Click \"Add to cart\"",
+        "https://demowebshop.tricentis.com/apparel-shoes | Click \"Add to cart\""
+      ],
+      "status": "pending",
+      "created_at": null
+    },
+    {
+      "method": "POST",
+      "pattern": "POST demowebshop.tricentis.com/subscribenewsletter",
+      "url": "https://demowebshop.tricentis.com/subscribenewsletter",
+      "triggers": [
+        "https://demowebshop.tricentis.com/ | Click \"Subscribe\""
+      ],
+      "status": "pending",
+      "created_at": null
+    },
+    {
+      "method": "POST",
+      "pattern": "POST csp.withgoogle.com/csp/youtube_main/allowlist",
+      "url": "https://csp.withgoogle.com/csp/youtube_main/allowlist",
+      "triggers": [
+        "https://demowebshop.tricentis.com/ | replay: Click \"New products\""
+      ],
+      "status": "pending",
+      "created_at": null
+    },
+    {
+      "method": "POST",
+      "pattern": "POST www.google-analytics.com/g/collect",
+      "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-DY1T9T89QG&gtm=45je6ae1v9172098130za208xf1&_p=1792422420498&gcd=13l3l3l3l1l1&npa=0&dma=0&cid=1972251106.1792422421&frm=0&ngs=1&pscdl=noapi&rcb=3&sr=1280x720&uaa=x86&uab=64&uafvl=Google%2520Chrome%3B155.0.8059.85%7CChromium%3B155.0.8059.85%7CNot%28A%253ABrand%3B24.0.0.0&uam=&uamb=0&uap=Windows&uapv=19.0.0&uaw=0&ul=en-us&_s=1&tag_exp=115938465~115938469~118897920~118897930~120213116~120385422~120469145~120469153~121246026~121246034&sid=1792422420&sct=1&seg=0&dl=https%3A%2F%2Fplus.google.com%2F%2Bnopcommerce&dr=https%3A%2F%2Fdemowebshop.tricentis.com%2F&dt=Google+Workspace+Updates%3A+New+community+features+for+Google+Chat+and+an+update+on+Currents&en=page_view&_fv=1&_nsi=1&_ss=1&_ee=1&tfd=17427",
+      "triggers": [
+        "https://demowebshop.tricentis.com/ | replay: Click \"New products\""
+      ],
+      "status": "pending",
+      "created_at": null
+    }
+  ]
+}

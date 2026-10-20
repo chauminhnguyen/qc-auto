@@ -1,4 +1,5 @@
 /.env
+/auth-state.json
 __pycache__/
 *.py[cod]
 .env

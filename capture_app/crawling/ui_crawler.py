@@ -20,6 +20,7 @@ stay behind that same flag.
 from __future__ import annotations
 
 import heapq
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -97,7 +98,7 @@ class Transition:
 
 
 class HeadlessCrawler:
-    """Background (headless) explorer. One crawl = one browser session."""
+    """Playwright explorer. One crawl = one browser session."""
 
     # actions_per_state default raised 8 -> 25: rank_actions() always tries
     # lower tier numbers first (see tier_of() in ax_tree.py), and acted +=1
@@ -110,7 +111,9 @@ class HeadlessCrawler:
     def __init__(self, vault: VaultWriter, session_id: str | None = None,
                  max_states: int = 30, max_depth: int = 4,
                  actions_per_state: int = 25, allow_submit: bool = False,
-                 allow_delete: bool = False, verbose: bool = False):
+                 allow_delete: bool = False, verbose: bool = False,
+                 auth_state: str | Path | None = None,
+                 interactive: bool = False):
         self.vault = vault
         self.session_id = session_id
         self.max_states = max_states
@@ -119,6 +122,12 @@ class HeadlessCrawler:
         self.allow_submit = allow_submit
         self.allow_delete = allow_delete
         self.verbose = verbose
+        self.auth_state = Path(auth_state) if auth_state is not None else None
+        self.interactive = interactive
+        self.safety_gate = None
+        self._safety_initial_allowlist = None
+        self._safety_initial_never = None
+        self._safety_initial_undecided = None
         self._api_buffer: list[dict] = []
         self._scope_host = ""
         self._banner_done = False
@@ -131,6 +140,124 @@ class HeadlessCrawler:
     def _vlog(self, msg: str):
         if self.verbose:
             print(f"[crawler] {msg}", flush=True)
+
+    def _browser_headless(self) -> bool:
+        # Manual login needs a visible browser. Action review is also easier
+        # to judge with the page visible, including when auth state is loaded.
+        return self.auth_state is not None and not self.interactive
+
+    def _wait_for_manual_login(self, page) -> bool:
+        """Wait for a user to log in when no saved browser state was given."""
+        if self.auth_state is not None:
+            return True
+        self._log("Log in using the opened browser, then press Enter to begin crawling.")
+        try:
+            input()
+        except EOFError:
+            self._log("no interactive input available; aborting before exploration")
+            return False
+        self._settle(page)
+        return True
+
+    def _approve_action(self, action: Action) -> bool:
+        """Request per-action HITL approval without exposing field values."""
+        if not self.interactive:
+            return True
+        target = action.name
+        if action.kind == "goto":
+            from capture_app.safety_gate.decisions import redact_url
+            target = redact_url(target)
+        summary = f"{action.kind} {action.role} {target!r}".strip()
+        if action.dup_index:
+            summary += f" (matching control {action.dup_index + 1})"
+        try:
+            answer = input(f"Approve crawler action: {summary}? [y/N] ").strip().casefold()
+        except EOFError:
+            answer = ""
+        return answer in {"y", "yes"}
+
+    def _prepare_safety_discovery(self, start_url: str):
+        from capture_app.env import load_project_env
+        load_project_env()
+        if self.auth_state is not None and not self.auth_state.is_file():
+            message = f"Auth state file not found: {self.auth_state}"
+            self._log(f"ERROR: {message}")
+            raise FileNotFoundError(message)
+        from capture_app.safety_gate.decisions import DecisionStore
+        decisions_path = os.getenv("WRITE_SAFE_DECISIONS", "decisions.json")
+        initial = DecisionStore(decisions_path).data
+        self._safety_initial_allowlist = set(initial["allowlist"])
+        self._safety_initial_never = set(initial["never"])
+        self._safety_initial_undecided = set(initial["undecided"])
+        if os.getenv("WRITE_SAFE_DISCOVERY", "1").strip().casefold() in {"0", "false", "no"}:
+            return
+        from capture_app.safety_gate.discovery import ensure_discovered
+        report_dir = os.getenv("WRITE_SAFE_DISCOVERY_DIR", "safety_reports/discovery")
+        ensure_discovered(start_url, report_dir, auth_state=self.auth_state)
+
+    def _new_safe_context(self, browser, start_url: str):
+        options = {"service_workers": "block"}
+        if self.auth_state is not None:
+            if not self.auth_state.is_file():
+                message = f"Auth state file not found: {self.auth_state}"
+                self._log(f"ERROR: {message}")
+                raise FileNotFoundError(message)
+            options["storage_state"] = str(self.auth_state)
+        try:
+            context = browser.new_context(**options)
+        except Exception:
+            if self.auth_state is not None:
+                self._log(
+                    "ERROR: could not load the Playwright auth state; check that the "
+                    "file contains valid storage-state JSON. Cookie values were not displayed."
+                )
+                raise ValueError(
+                    f"Could not load auth state from {self.auth_state}; "
+                    "check that it is a valid Playwright storage-state file"
+                ) from None
+            raise
+        if self.auth_state is not None:
+            self._log("Auth state cookies and storage loaded successfully.")
+        from capture_app.safety_gate import WriteSafeGate
+        self.safety_gate = WriteSafeGate(
+            context, base_url=start_url,
+            initial_allowlist=self._safety_initial_allowlist,
+            initial_never=self._safety_initial_never,
+            initial_undecided=self._safety_initial_undecided,
+        )
+        return context
+
+    @staticmethod
+    def _actions_from_checkpoint(rows):
+        actions = []
+        for row in rows:
+            try:
+                actions.append(Action(
+                    kind=str(row["kind"]), role=str(row.get("role", "")),
+                    name=str(row.get("name", "")), value=str(row.get("value", "")),
+                    dup_index=int(row.get("dup_index", 0)),
+                ))
+            except (KeyError, TypeError, ValueError):
+                return []
+        return actions
+
+    def _resume_actions(self, page, start_url: str):
+        if self.safety_gate is None:
+            return []
+        path = self._actions_from_checkpoint(self.safety_gate.resume_path(start_url))
+        if path and self._replay(page, start_url, path):
+            self._log(f"resuming from checkpoint after {len(path)} actions")
+            return path
+        return []
+
+    def _finish_safety_run(self, start_url: str, completed: bool):
+        if self.safety_gate is None:
+            return
+        if completed:
+            self.safety_gate.complete_resume(start_url)
+        self.safety_gate.close()
+        from capture_app.safety_gate.review import review_if_interactive
+        review_if_interactive(str(self.safety_gate.decisions.path))
 
     # ------------------------------------------------------------------
     # Seed: start URL + replayable step path from the manual capture
@@ -178,14 +305,22 @@ class HeadlessCrawler:
             return []
         self._log(f"start: {start_url} (scope: {self._scope_host})")
         transitions: list[Transition] = []
+        self._prepare_safety_discovery(start_url)
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
+            browser = p.chromium.launch(headless=self._browser_headless())
+            context = self._new_safe_context(browser, start_url)
             page = context.new_page()
+            page.set_default_timeout(5000)
+            page.set_default_navigation_timeout(10000)
             page.on("response", self._on_response)
 
             page.goto(start_url)
             self._settle(page)
+            if not self._wait_for_manual_login(page):
+                browser.close()
+                self._finish_safety_run(start_url, completed=False)
+                return []
+            resume_path = self._resume_actions(page, start_url)
             self._log(f"loaded: {page.url} title={page.title()!r}")
             items = self._snapshot(page)
             self._log(f"initial AX snapshot: {len(items)} interactables")
@@ -221,7 +356,7 @@ class HeadlessCrawler:
                 heapq.heappush(frontier, (-depth_, tier_, counter, fp_, path_))
                 counter += 1
 
-            _push(fp0, [], 0)
+            _push(fp0, resume_path, len(resume_path))
 
             while frontier and len(visited) < self.max_states:
                 neg_depth, _tier, _ctr, fp, path = heapq.heappop(frontier)
@@ -255,11 +390,37 @@ class HeadlessCrawler:
                     if akey in attempted:
                         continue
                     attempted.add(akey)
+                    if self.safety_gate and self.safety_gate.should_skip(page.url, action.label):
+                        self._vlog(f"skip repeated failure: {action.label}")
+                        self.safety_gate.checkpoint(
+                            action.label, page.url, "repeated failures", start_url=start_url,
+                            resume_path=path,
+                        )
+                        transitions.append(Transition(
+                            from_fp=fp, action=action, ok=False, tier=tier,
+                            from_url=page.url, detail="skipped after repeated failures",
+                            path=path,
+                        ))
+                        continue
                     if is_denied(_item_for(items, action)):
                         self._vlog(f"skip denied: {action.role} {action.name!r}")
+                        if self.safety_gate:
+                            self.safety_gate.checkpoint(
+                                action.label, page.url, "held", start_url=start_url,
+                                resume_path=path,
+                            )
+                        transitions.append(Transition(
+                            from_fp=fp, action=action, ok=False, tier=tier,
+                            from_url=page.url, detail="denied control", path=path,
+                        ))
                         continue
                     if is_delete_like(action) and not self.allow_delete:
                         self._vlog(f"held delete-like: {action.label}")
+                        if self.safety_gate:
+                            self.safety_gate.checkpoint(
+                                action.label, page.url, "held", start_url=start_url,
+                                resume_path=path,
+                            )
                         transitions.append(Transition(
                             from_fp=fp, action=action, ok=False, tier=tier,
                             from_url=page.url,
@@ -268,15 +429,43 @@ class HeadlessCrawler:
                         continue
                     if is_submit_like(action) and not self.allow_submit:
                         self._vlog(f"held submit-like: {action.label}")
+                        if self.safety_gate:
+                            self.safety_gate.checkpoint(
+                                action.label, page.url, "held", start_url=start_url,
+                                resume_path=path,
+                            )
                         transitions.append(Transition(
                             from_fp=fp, action=action, ok=False, tier=tier,
                             from_url=page.url,
                             detail="submit-like action held (allow_submit=False)",
                         ))
                         continue
+                    if not self._approve_action(action):
+                        self._log(f"  skipped by user: {action.label}")
+                        transitions.append(Transition(
+                            from_fp=fp, action=action, ok=False, tier=tier,
+                            from_url=page.url,
+                            detail="action declined by user", path=path,
+                        ))
+                        if self.safety_gate:
+                            self.safety_gate.checkpoint(
+                                action.label, page.url, "declined", start_url=start_url,
+                                resume_path=path,
+                            )
+                        acted += 1
+                        continue
                     tr = self._perform(page, start_url, path, fp, action)
                     tr.tier = tier
+                    if tr.ok and not self._in_scope(tr.to_url):
+                        tr.ok, tr.detail = False, "left scope"
                     transitions.append(tr)
+                    if self.safety_gate:
+                        next_path = path + [action] if tr.ok else path
+                        self.safety_gate.checkpoint(
+                            action.label, tr.from_url or page.url,
+                            "ok" if tr.ok else tr.detail or "failed",
+                            start_url=start_url, resume_path=next_path,
+                        )
                     acted += 1
                     self.tier_stats[tier]["attempts"] += 1
                     self.tier_stats[tier]["apis"] += len(tr.apis)
@@ -302,6 +491,7 @@ class HeadlessCrawler:
             for t, s in sorted(self.tier_stats.items())
         )
         self._log(f"done: {len(visited)} states, {len(transitions)} transitions | tiers: {stats}")
+        self._finish_safety_run(start_url, completed=not frontier)
         return transitions
 
     # ------------------------------------------------------------------
@@ -550,15 +740,19 @@ class HeadlessCrawler:
         return samples[:3]
 
     def _replay(self, page, start_url: str, path: list[Action]):
-        self._goto_resilient(page, start_url)
-        self._settle(page)
+        try:
+            self._goto_resilient(page, start_url)
+            self._settle(page)
+        except Exception:
+            return False
         for action in path:
             try:
                 self._do(page, action)
                 self._settle(page)
                 self._wait_for_network_quiet(page)  # let this step's own replies land BEFORE the next action starts its clock
             except Exception:
-                break
+                return False
+        return True
 
     def _goto_resilient(self, page, url: str):
         """FIX for a crawl-killing crash: page.goto() can be interrupted by
@@ -581,7 +775,8 @@ class HeadlessCrawler:
     def _perform(self, page, start_url: str, path: list[Action],
                  fp: str, action: Action) -> Transition:
         try:
-            self._replay(page, start_url, path)
+            if not self._replay(page, start_url, path):
+                raise RuntimeError("replay/navigation failed")
         except Exception as e:
             # FIX: this used to be unprotected -- a navigation race here
             # (see _goto_resilient's docstring) crashed the entire crawl
@@ -610,8 +805,10 @@ class HeadlessCrawler:
         )
 
     def _do(self, page, action: Action):
+        if self.safety_gate:
+            self.safety_gate.set_trigger(page.url, action.label)
         if action.kind == "goto":
-            page.goto(action.name)
+            page.goto(action.name, timeout=10000)
             return
         try:
             self._do_strict(page, action, first_only=False)

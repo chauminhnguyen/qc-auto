@@ -83,3 +83,67 @@ a slower page.
 Calls scale with distinct `ScreenIndex` values, not clicks, products, or
 crawl revisits. A full site should land in the tens of calls, and a second
 run against an unchanged site should cost close to zero.
+
+## Write-safe UI exploration
+
+The Playwright crawlers install a request gate before page navigation and
+block service workers so application writes cannot bypass routing. Safe reads
+pass through; state-changing requests default to an in-memory mock and are
+queued in `decisions.json` for a bounded end-of-run review when a terminal is
+available.
+Mocked creates, patches, and deletes remain visible to later reads in that
+browser run. Discovery runs once per target origin before the first crawl,
+records a credential-scrubbed HAR, probes common OpenAPI paths, and seeds the
+endpoint lists. Set `WRITE_SAFE_DISCOVERY=0` to skip that phase.
+
+Authentication and action approval are independent. Without `--auth-state`,
+the crawler opens a visible browser and waits for you to log in before it
+explores, even when the site allows anonymous access. With `--auth-state`, it
+restores the saved Playwright session and skips that pause. Add `--interactive`
+to ask before each eligible crawler action; a declined action is skipped and
+recorded. This action approval does not override `--allow-submit` or
+`--allow-delete`. The separate endpoint review at the end records decisions
+for later runs; unanswered endpoints remain mocked.
+
+Examples:
+
+```powershell
+# Saved login; crawl headlessly
+python ui_transitions.py crawl --vault ./ObsidianVault --auth-state ./auth-state.json
+
+# Saved login plus approval before each action
+python ui_transitions.py crawl --vault ./ObsidianVault --auth-state ./auth-state.json --interactive
+
+# No saved login; open browser and wait for manual login
+python ui_transitions.py crawl --vault ./ObsidianVault
+
+# The live-runner entry point supports the same independent options
+python live_runner.py --vault ./ObsidianVault --auth-state ./auth-state.json
+python live_runner.py --vault ./ObsidianVault --auth-state ./auth-state.json --interactive
+```
+
+Configure `WRITE_SAFE_AUTH_PATHS` as a comma-separated list of auth path
+prefixes (for example `/login,/csrf`, which permits POST) if the site must
+submit login or session traffic during exploration. Prefix a path with a method
+when needed (for example `PUT:/auth/refresh`). Those requests pass only when configured.
+The endpoint decision and report locations can be changed with
+`WRITE_SAFE_DECISIONS`, `WRITE_SAFE_REPORT_DIR`, and
+`WRITE_SAFE_DISCOVERY_DIR`.
+
+Real writes stay mocked unless the endpoint is approved, the request carries
+the configured test-account identity signal, and it either creates a record
+with a `QA_` tag or targets an ID returned by a real tool-created create.
+Configure `WRITE_SAFE_ACCOUNT_HEADER` with its expected value, or configure
+`WRITE_SAFE_ACCOUNT_COOKIE` with its expected value, only when the site exposes
+a reliable signal for the test account. Without that signal, approved writes
+still run against mocks. Set `WRITE_SAFE_QA_FIELD` only when the API supports a
+string field the gate can mark with `QA_<run>_...` on approved creates. Review
+choices apply on a later run; unanswered and
+deferred items remain queued and mocked. Reports under `safety_reports/`
+include requests, action outcomes, queued endpoints, list changes, skips, and
+mock limitations. Checkpoints let a later run replay the last successful
+action path; actions that fail repeatedly are skipped.
+
+Mocked UI success does not verify server validation, permissions, computed
+fields, server ordering or counts, WebSockets/SSE, triggered jobs, uploads, or
+multi-step server state.

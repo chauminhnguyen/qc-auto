@@ -31,6 +31,7 @@ import math
 import random
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
@@ -71,10 +72,11 @@ class BestFirstCrawler(HeadlessCrawler):
                  cluster_cap: int = 2, fold_threshold: float | None = 0.9,
                  max_pending: int = 6, time_budget_s: float | None = None,
                  commit_reserve: int = 3, rng_seed: int = 0,
-                 interactive: bool = False, **kwargs):
+                 interactive: bool = False, auth_state: str | Path | None = None,
+                 **kwargs):
         # NOTE: actions_per_state (inherited) is unused here; k_per_visit and
         # cluster_cap replace it. max_states now caps nodes, so raise it (~60).
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, auth_state=auth_state, interactive=interactive, **kwargs)
         self.max_actions = max_actions
         self.k_per_visit = k_per_visit
         self.plateau = plateau              # stop after this many actions with zero reward
@@ -186,6 +188,9 @@ class BestFirstCrawler(HeadlessCrawler):
                 break
             node.attempted.add(_akey(action))
             if is_denied(_item_for(node.items, action)):
+                transitions.append(Transition(
+                    from_fp=node.sid, action=action, ok=False, tier=tier, path=node.path,
+                    from_url=node.url, detail="denied control"))
                 continue
             if is_delete_like(action) and not self.allow_delete:
                 transitions.append(Transition(
@@ -216,6 +221,9 @@ class BestFirstCrawler(HeadlessCrawler):
             recorded Transition, matching the BFS crawler's own behavior."""
             node.attempted.add(_akey(action))
             if is_denied(_item_for(node.items, action)):
+                transitions.append(Transition(
+                    from_fp=node.sid, action=action, ok=False, tier=tier, path=node.path,
+                    from_url=node.url, detail="denied control"))
                 return
             if is_delete_like(action) and not self.allow_delete:
                 transitions.append(Transition(
@@ -303,9 +311,11 @@ class BestFirstCrawler(HeadlessCrawler):
         used = stale = 0
         deadline = time.time() + self.time_budget_s if self.time_budget_s else None
 
+        self._prepare_safety_discovery(start_url)
         with sync_playwright() as p:
             try:
-                browser = p.chromium.launch(headless=not self.interactive)
+                headless = self._browser_headless()
+                browser = p.chromium.launch(headless=headless)
             except PlaywrightError as bundled_error:
                 # Prefer the installed Edge/Chrome channel when the matching
                 # Playwright-managed browser binary has not been downloaded.
@@ -313,7 +323,7 @@ class BestFirstCrawler(HeadlessCrawler):
                 for channel in ("msedge", "chrome"):
                     try:
                         browser = p.chromium.launch(
-                            channel=channel, headless=not self.interactive)
+                            channel=channel, headless=headless)
                         self._log(
                             f"Playwright Chromium unavailable; using installed {channel} browser"
                         )
@@ -322,27 +332,26 @@ class BestFirstCrawler(HeadlessCrawler):
                         continue
                 if browser is None:
                     raise bundled_error
-            page = browser.new_context().new_page()
+            context = self._new_safe_context(browser, start_url)
+            page = context.new_page()
+            page.set_default_timeout(5000)
+            page.set_default_navigation_timeout(10000)
             page.on("response", self._on_response)
 
             page.goto(start_url)
             self._settle(page)
-            if self.interactive:
-                self._log(
-                    "Complete any login or CAPTCHA in the browser, then press Enter here to crawl."
-                )
-                try:
-                    input()
-                except EOFError:
-                    self._log("no interactive input available; continuing with current page")
-                self._settle(page)
+            if not self._wait_for_manual_login(page):
+                browser.close()
+                self._finish_safety_run(start_url, completed=False)
+                return []
+            resume_path = self._resume_actions(page, start_url)
             items = self._snapshot(page)
             if not items:
                 self._log("snapshot empty -- retrying once after 3s")
                 page.wait_for_timeout(3000)
                 items = self._snapshot(page)
             sid, _ = screens.resolve(page.url, items)
-            root = Node(sid, page.url, [], 0, items)
+            root = Node(sid, page.url, resume_path, len(resume_path), items)
             nodes: dict[str, Node] = {sid: root}
             frontier: list[Node] = [root]
             cur: Node | None = root          # which node the browser is sitting on right now
@@ -356,7 +365,14 @@ class BestFirstCrawler(HeadlessCrawler):
                 total = sum(n.visits for n in nodes.values())
                 node = max(frontier, key=lambda n: self._score(n, total))
                 node.visits += 1
+                transition_start = len(transitions)
                 picks, exhausted = self._pick(node, transitions)
+                if self.safety_gate:
+                    for held in transitions[transition_start:]:
+                        self.safety_gate.checkpoint(
+                            held.action.label, held.from_url or node.url, "held",
+                            start_url=start_url, resume_path=node.path,
+                        )
                 if exhausted:
                     frontier.remove(node)
                 self._log(f"visit {node.sid[:8]} depth={node.depth} picks={len(picks)} "
@@ -365,11 +381,24 @@ class BestFirstCrawler(HeadlessCrawler):
                 for tier, action in picks:
                     if used >= self.max_actions:
                         break
+                    if self.safety_gate and self.safety_gate.should_skip(node.url, action.label):
+                        self._vlog(f"skip repeated failure: {action.label}")
+                        self.safety_gate.checkpoint(
+                            action.label, node.url, "repeated failures",
+                            start_url=start_url, resume_path=node.path,
+                        )
+                        transitions.append(Transition(
+                            from_fp=node.sid, action=action, ok=False, tier=tier,
+                            from_url=node.url, path=node.path,
+                            detail="skipped after repeated failures",
+                        ))
+                        continue
                     if not self._in_scope(page.url) and cur is node:
                         cur = None
                     if cur is not node or len(pending) >= self.max_pending:
                         try:
-                            self._replay(page, start_url, node.path)
+                            if not self._replay(page, start_url, node.path):
+                                raise RuntimeError("replay/navigation failed")
                             cur, pending = node, []
                         except Exception as e:
                             cur = None
@@ -379,9 +408,29 @@ class BestFirstCrawler(HeadlessCrawler):
                                 from_fp=node.sid, action=action, ok=False, tier=tier,
                                 from_url=node.url,
                                 path=node.path, detail=f"replay failed: {str(e)[:150]}"))
+                            if self.safety_gate:
+                                self.safety_gate.checkpoint(
+                                    action.label, node.url, str(e), start_url=start_url,
+                                    resume_path=node.path,
+                                )
                             if node.replay_failures >= 2 and node in frontier:
                                 frontier.remove(node)
                             break
+
+                    if not self._approve_action(action):
+                        self._log(f"  skipped by user: {action.label}")
+                        used += 1
+                        transitions.append(Transition(
+                            from_fp=node.sid, action=action, ok=False, tier=tier,
+                            from_url=node.url, path=node.path,
+                            detail="action declined by user",
+                        ))
+                        if self.safety_gate:
+                            self.safety_gate.checkpoint(
+                                action.label, node.url, "declined", start_url=start_url,
+                                resume_path=node.path,
+                            )
+                        continue
 
                     used += 1
                     base = node.path + pending
@@ -413,6 +462,14 @@ class BestFirstCrawler(HeadlessCrawler):
                                 self._vlog(f"folded into existing screen {sid2[:8]}: {tr.to_url}")
                     else:
                         cur = None                      # a failed action may leave a modal / half-nav behind
+
+                    if self.safety_gate:
+                        self.safety_gate.checkpoint(
+                            action.label, tr.from_url or node.url,
+                            "ok" if tr.ok else tr.detail or "failed",
+                            start_url=start_url,
+                            resume_path=base + [action] if tr.ok else base,
+                        )
 
                     if self.use_ledger:
                         reward += self._ledger_note(node, action, tr)
@@ -447,4 +504,5 @@ class BestFirstCrawler(HeadlessCrawler):
                          for t, s in sorted(self.tier_stats.items()))
         self._log(f"done ({why}): {len(nodes)} screens, {used} actions, "
                   f"{len(seen_apis)} known endpoints | {stats}")
+        self._finish_safety_run(start_url, completed=not frontier)
         return transitions

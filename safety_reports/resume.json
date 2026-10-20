@@ -1,0 +1,21 @@
+{
+  "origin": "demowebshop.tricentis.com",
+  "start_url": "https://demowebshop.tricentis.com/",
+  "path": [
+    {
+      "kind": "click",
+      "role": "link",
+      "name": "apparel",
+      "value": "",
+      "dup_index": 0
+    },
+    {
+      "kind": "click",
+      "role": "link",
+      "name": "Picture of Denim Short with Rhinestones",
+      "value": "",
+      "dup_index": 0
+    }
+  ],
+  "updated_at": 1792509308.6017122
+}

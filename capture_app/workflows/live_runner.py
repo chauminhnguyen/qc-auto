@@ -72,7 +72,8 @@ class LiveRunner:
                  allow_submit: bool = False, allow_delete: bool = False,
                  max_states: int = 30,
                  max_depth: int = 10, actions_per_state: int = 8,
-                 verbose: bool = False):
+                 verbose: bool = False, auth_state: str | Path | None = None,
+                 interactive: bool = False):
         self.vault = vault
         self.session_id = session_id
         self.global_state = GlobalStateStore()
@@ -83,7 +84,8 @@ class LiveRunner:
             "max_states": max_states,
             "max_depth": max_depth, "actions_per_state": actions_per_state,
             "allow_submit": allow_submit, "allow_delete": allow_delete,
-            "verbose": verbose,
+            "verbose": verbose, "auth_state": auth_state,
+            "interactive": interactive,
         }
 
     def run(self) -> dict:
@@ -101,6 +103,8 @@ class LiveRunner:
             allow_submit=self._crawler_kwargs["allow_submit"],
             allow_delete=self._crawler_kwargs["allow_delete"],
             verbose=self._crawler_kwargs["verbose"],
+            auth_state=self._crawler_kwargs["auth_state"],
+            interactive=self._crawler_kwargs["interactive"],
         )
         transitions = crawler.crawl()
 
@@ -313,18 +317,27 @@ class LiveRunner:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Live headless crawl vs standard flow")
+    parser = argparse.ArgumentParser(description="Live crawl vs standard flow")
     parser.add_argument("--vault", default="./ObsidianVault")
     parser.add_argument("--session", default=None)
     parser.add_argument("--allow-submit", action="store_true")
     parser.add_argument("--allow-delete", action="store_true",
                         help="separate opt-in for delete/remove actions")
+    parser.add_argument(
+        "--auth-state", default=None,
+        help="Playwright storage-state JSON; skips the manual login pause",
+    )
+    parser.add_argument(
+        "--interactive", action="store_true",
+        help="ask for approval before each crawler action",
+    )
     parser.add_argument("--verbose", action="store_true",
                         help="per-action detail (attempts, skips, errors)")
     args = parser.parse_args()
     runner = LiveRunner(VaultWriter(Path(args.vault)), args.session,
                         allow_submit=args.allow_submit, allow_delete=args.allow_delete,
-                        verbose=args.verbose)
+                        verbose=args.verbose, auth_state=args.auth_state,
+                        interactive=args.interactive)
     out = runner.run()
     print(f"Session: {out['session_id']}, standard states: {out['standard_states']}")
     print(f"Transitions: {out['transitions']}, good: {out['good']}, bad: {out['bad']}, "

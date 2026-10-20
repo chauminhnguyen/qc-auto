@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "never": [],
+  "never_keywords": [
+    "batch",
+    "bulk",
+    "checkout",
+    "delete-account",
+    "email",
+    "export-all",
+    "import",
+    "logout",
+    "payment",
+    "purchase",
+    "purge",
+    "reset",
+    "unsubscribe",
+    "upload"
+  ],
+  "allowlist": [
+    "GET demowebshop.tricentis.com/",
+    "GET demowebshop.tricentis.com/Content/jquery-ui-themes/smoothness/images/ui-bg_flat_75_ffffff_40x100.png",
+    "GET demowebshop.tricentis.com/Content/jquery-ui-themes/smoothness/jquery-ui-1.10.3.custom.min.css",
+    "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/nivo-slider.css",
+    "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/themes/default/default.css",
+    "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/themes/default/loading.gif",
+    "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Scripts/jquery.nivo.slider.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery-1.10.2.min.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery-migrate-1.2.1.min.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery-ui-1.10.3.custom.min.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery.validate.min.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery.validate.unobtrusive.min.js",
+    "GET demowebshop.tricentis.com/Scripts/public.ajaxcart.js",
+    "GET demowebshop.tricentis.com/Scripts/public.common.js",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/bullet-right.gif",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/ico-arrow-r.gif",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/logo.png",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/progress-step-active.gif",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/progress-step-inactive.gif",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/star-x-active.png",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/star-x-inactive.png",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/top-menu-divider.png",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/responsive.css",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/styles.css",
+    "GET demowebshop.tricentis.com/books",
+    "GET demowebshop.tricentis.com/cart",
+    "GET demowebshop.tricentis.com/computers",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000003_desktops_125.jpg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000005_accessories_125.jpg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000015_25-virtual-gift-card_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000031_build-your-own-computer_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000130_computing-and-internet_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000131_health-book_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000132_science_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000133_fiction_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000172_build-your-own-cheap-computer_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000201_build-your-own-expensive-computer_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000204_simple-computer_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000208_fiction-ex_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000209_copy-of-computing-and-internet-ex_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000215.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000224_141-inch-laptop_125.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000230_desktop-pc-with-cdrw_125.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000231_elite-desktop-pc_125.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000232_notebooks_125.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000240.png",
+    "GET demowebshop.tricentis.com/desktops",
+    "GET demowebshop.tricentis.com/login",
+    "GET demowebshop.tricentis.com/register",
+    "GET demowebshop.tricentis.com/wishlist",
+    "GET ssl.google-analytics.com/__utm.gif",
+    "GET ssl.google-analytics.com/ga.js",
+    "GET ssl.google-analytics.com/r/__utm.gif"
+  ],
+  "decisions": {},
+  "queue": {
+    "POST demowebshop.tricentis.com/addproducttocart/catalog/{id}/{id}/{id}": {
+      "method": "POST",
+      "pattern": "POST demowebshop.tricentis.com/addproducttocart/catalog/{id}/{id}/{id}",
+      "url": "https://demowebshop.tricentis.com/addproducttocart/catalog/2/1/1",
+      "triggers": [
+        "https://demowebshop.tricentis.com/ | Click \"Add to cart\"",
+        "https://demowebshop.tricentis.com/gift-cards | Click \"Add to cart\"",
+        "https://demowebshop.tricentis.com/apparel-shoes | Click \"Add to cart\"",
+        "https://demowebshop.tricentis.com/newproducts | Click \"Add to cart\"",
+        "https://demowebshop.tricentis.com/jewelry | Click \"Add to cart\""
+      ],
+      "status": "pending",
+      "created_at": null
+    },
+    "POST demowebshop.tricentis.com/subscribenewsletter": {
+      "method": "POST",
+      "pattern": "POST demowebshop.tricentis.com/subscribenewsletter",
+      "url": "https://demowebshop.tricentis.com/subscribenewsletter",
+      "triggers": [
+        "https://demowebshop.tricentis.com/ | Click \"Subscribe\"",
+        "https://demowebshop.tricentis.com/newproducts | Click \"Subscribe\"",
+        "https://demowebshop.tricentis.com/jewelry | Click \"Subscribe\""
+      ],
+      "status": "pending",
+      "created_at": null
+    },
+    "POST csp.withgoogle.com/csp/youtube_main/allowlist": {
+      "method": "POST",
+      "pattern": "POST csp.withgoogle.com/csp/youtube_main/allowlist",
+      "url": "https://csp.withgoogle.com/csp/youtube_main/allowlist",
+      "triggers": [
+        "https://demowebshop.tricentis.com/ | replay: Click \"New products\""
+      ],
+      "status": "pending",
+      "created_at": null
+    },
+    "POST www.google-analytics.com/g/collect": {
+      "method": "POST",
+      "pattern": "POST www.google-analytics.com/g/collect",
+      "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-DY1T9T89QG&gtm=45je6ae1v9172098130za208xf1&_p=1792422420498&gcd=13l3l3l3l1l1&npa=0&dma=0&cid=1972251106.1792422421&frm=0&ngs=1&pscdl=noapi&rcb=3&sr=1280x720&uaa=x86&uab=64&uafvl=Google%2520Chrome%3B155.0.8059.85%7CChromium%3B155.0.8059.85%7CNot%28A%253ABrand%3B24.0.0.0&uam=&uamb=0&uap=Windows&uapv=19.0.0&uaw=0&ul=en-us&_s=1&tag_exp=115938465~115938469~118897920~118897930~120213116~120385422~120469145~120469153~121246026~121246034&sid=1792422420&sct=1&seg=0&dl=https%3A%2F%2Fplus.google.com%2F%2Bnopcommerce&dr=https%3A%2F%2Fdemowebshop.tricentis.com%2F&dt=Google+Workspace+Updates%3A+New+community+features+for+Google+Chat+and+an+update+on+Currents&en=page_view&_fv=1&_nsi=1&_ss=1&_ee=1&tfd=17427",
+      "triggers": [
+        "https://demowebshop.tricentis.com/ | replay: Click \"New products\""
+      ],
+      "status": "pending",
+      "created_at": null
+    }
+  },
+  "approvals": {},
+  "safe_requests": [],
+  "undecided": [
+    "POST csp.withgoogle.com/csp/youtube_main/allowlist",
+    "POST demowebshop.tricentis.com/addproducttocart/catalog/{id}/{id}/{id}",
+    "POST demowebshop.tricentis.com/subscribenewsletter",
+    "POST www.google-analytics.com/g/collect"
+  ]
+}

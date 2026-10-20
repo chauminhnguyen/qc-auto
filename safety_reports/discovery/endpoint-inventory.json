@@ -1,0 +1,399 @@
+{
+  "base_url": "https://demowebshop.tricentis.com/",
+  "pages_visited": 8,
+  "har": "safety_reports\\discovery\\discovery.har",
+  "specs": [],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/",
+      "pattern": "GET demowebshop.tricentis.com/",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/styles.css",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/styles.css",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/responsive.css",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/responsive.css",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Content/jquery-ui-themes/smoothness/jquery-ui-1.10.3.custom.min.css",
+      "pattern": "GET demowebshop.tricentis.com/Content/jquery-ui-themes/smoothness/jquery-ui-1.10.3.custom.min.css",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/nivo-slider.css",
+      "pattern": "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/nivo-slider.css",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/themes/default/default.css",
+      "pattern": "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/themes/default/default.css",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Scripts/jquery-1.10.2.min.js",
+      "pattern": "GET demowebshop.tricentis.com/Scripts/jquery-1.10.2.min.js",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Scripts/jquery.validate.min.js",
+      "pattern": "GET demowebshop.tricentis.com/Scripts/jquery.validate.min.js",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Scripts/jquery.validate.unobtrusive.min.js",
+      "pattern": "GET demowebshop.tricentis.com/Scripts/jquery.validate.unobtrusive.min.js",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Scripts/jquery-ui-1.10.3.custom.min.js",
+      "pattern": "GET demowebshop.tricentis.com/Scripts/jquery-ui-1.10.3.custom.min.js",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Scripts/jquery-migrate-1.2.1.min.js",
+      "pattern": "GET demowebshop.tricentis.com/Scripts/jquery-migrate-1.2.1.min.js",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Scripts/public.common.js",
+      "pattern": "GET demowebshop.tricentis.com/Scripts/public.common.js",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Scripts/public.ajaxcart.js",
+      "pattern": "GET demowebshop.tricentis.com/Scripts/public.ajaxcart.js",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Scripts/jquery.nivo.slider.js",
+      "pattern": "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Scripts/jquery.nivo.slider.js",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/images/logo.png",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/logo.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000215.png",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000215.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000240.png",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000240.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000015_25-virtual-gift-card_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000015_25-virtual-gift-card_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000224_141-inch-laptop_125.png",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000224_141-inch-laptop_125.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000172_build-your-own-cheap-computer_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000172_build-your-own-cheap-computer_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000031_build-your-own-computer_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000031_build-your-own-computer_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000201_build-your-own-expensive-computer_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000201_build-your-own-expensive-computer_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000204_simple-computer_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000204_simple-computer_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://ssl.google-analytics.com/ga.js",
+      "pattern": "GET ssl.google-analytics.com/ga.js",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/images/top-menu-divider.png",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/top-menu-divider.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/images/bullet-right.gif",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/bullet-right.gif",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/themes/default/loading.gif",
+      "pattern": "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/themes/default/loading.gif",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/images/star-x-inactive.png",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/star-x-inactive.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/images/star-x-active.png",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/star-x-active.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Content/jquery-ui-themes/smoothness/images/ui-bg_flat_75_ffffff_40x100.png",
+      "pattern": "GET demowebshop.tricentis.com/Content/jquery-ui-themes/smoothness/images/ui-bg_flat_75_ffffff_40x100.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/register",
+      "pattern": "GET demowebshop.tricentis.com/register",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://ssl.google-analytics.com/r/__utm.gif?utmwv=5.7.2&utms=1&utmn=654028816&utmhn=demowebshop.tricentis.com&utmcs=UTF-8&utmsr=1280x720&utmvp=1280x720&utmsc=24-bit&utmul=en-us&utmje=0&utmfl=-&utmdt=Demo+Web+Shop&utmhid=2045625477&utmr=-&utmp=%2F&utmht=1792508292569&utmac=UA-6574346-11&utmcc=__utma%3D78382081.374046076.1792508293.1792508293.1792508293.1%3B%2B__utmz%3D78382081.1792508293.1.1.utmcsr%3D%28direct%29%7Cutmccn%3D%28direct%29%7Cutmcmd%3D%28none%29%3B&utmjid=1547250098&utmredir=1&utmu=qAAAAAAAAAAAAAAAAAAAAAAE~",
+      "pattern": "GET ssl.google-analytics.com/r/__utm.gif",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/login",
+      "pattern": "GET demowebshop.tricentis.com/login",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://ssl.google-analytics.com/__utm.gif?utmwv=5.7.2&utms=7&utmn=1037159461&utmhn=demowebshop.tricentis.com&utmcs=UTF-8&utmsr=1280x720&utmvp=1280x720&utmsc=24-bit&utmul=en-us&utmje=0&utmfl=-&utmdt=Demo+Web+Shop.+Computers&utmhid=1217425434&utmr=-&utmp=%2Fcomputers&utmht=1792508298627&utmac=UA-6574346-11&utmcc=__utma%3D78382081.374046076.1792508293.1792508293.1792508293.1%3B%2B__utmz%3D78382081.1792508293.1.1.utmcsr%3D%28direct%29%7Cutmccn%3D%28direct%29%7Cutmcmd%3D%28none%29%3B&utmjid=&utmu=qAAAAAAAAAAAAAAAAAAAAAAE~",
+      "pattern": "GET ssl.google-analytics.com/__utm.gif",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/cart",
+      "pattern": "GET demowebshop.tricentis.com/cart",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/images/progress-step-active.gif",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/progress-step-active.gif",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/images/progress-step-inactive.gif",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/progress-step-inactive.gif",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/wishlist",
+      "pattern": "GET demowebshop.tricentis.com/wishlist",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/books",
+      "pattern": "GET demowebshop.tricentis.com/books",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000130_computing-and-internet_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000130_computing-and-internet_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000209_copy-of-computing-and-internet-ex_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000209_copy-of-computing-and-internet-ex_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000133_fiction_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000133_fiction_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000208_fiction-ex_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000208_fiction-ex_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000131_health-book_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000131_health-book_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000132_science_125.jpeg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000132_science_125.jpeg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/Themes/DefaultClean/Content/images/ico-arrow-r.gif",
+      "pattern": "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/ico-arrow-r.gif",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/computers",
+      "pattern": "GET demowebshop.tricentis.com/computers",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000003_desktops_125.jpg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000003_desktops_125.jpg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000232_notebooks_125.png",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000232_notebooks_125.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000005_accessories_125.jpg",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000005_accessories_125.jpg",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/desktops",
+      "pattern": "GET demowebshop.tricentis.com/desktops",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000230_desktop-pc-with-cdrw_125.png",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000230_desktop-pc-with-cdrw_125.png",
+      "classification": "read"
+    },
+    {
+      "method": "GET",
+      "url": "https://demowebshop.tricentis.com/content/images/thumbs/0000231_elite-desktop-pc_125.png",
+      "pattern": "GET demowebshop.tricentis.com/content/images/thumbs/0000231_elite-desktop-pc_125.png",
+      "classification": "read"
+    }
+  ],
+  "never": [],
+  "allowlist": [
+    "GET demowebshop.tricentis.com/",
+    "GET demowebshop.tricentis.com/Content/jquery-ui-themes/smoothness/images/ui-bg_flat_75_ffffff_40x100.png",
+    "GET demowebshop.tricentis.com/Content/jquery-ui-themes/smoothness/jquery-ui-1.10.3.custom.min.css",
+    "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/nivo-slider.css",
+    "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/themes/default/default.css",
+    "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Content/nivoslider/themes/default/loading.gif",
+    "GET demowebshop.tricentis.com/Plugins/Widgets.NivoSlider/Scripts/jquery.nivo.slider.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery-1.10.2.min.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery-migrate-1.2.1.min.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery-ui-1.10.3.custom.min.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery.validate.min.js",
+    "GET demowebshop.tricentis.com/Scripts/jquery.validate.unobtrusive.min.js",
+    "GET demowebshop.tricentis.com/Scripts/public.ajaxcart.js",
+    "GET demowebshop.tricentis.com/Scripts/public.common.js",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/bullet-right.gif",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/ico-arrow-r.gif",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/logo.png",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/progress-step-active.gif",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/progress-step-inactive.gif",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/star-x-active.png",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/star-x-inactive.png",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/images/top-menu-divider.png",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/responsive.css",
+    "GET demowebshop.tricentis.com/Themes/DefaultClean/Content/styles.css",
+    "GET demowebshop.tricentis.com/books",
+    "GET demowebshop.tricentis.com/cart",
+    "GET demowebshop.tricentis.com/computers",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000003_desktops_125.jpg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000005_accessories_125.jpg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000015_25-virtual-gift-card_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000031_build-your-own-computer_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000130_computing-and-internet_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000131_health-book_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000132_science_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000133_fiction_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000172_build-your-own-cheap-computer_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000201_build-your-own-expensive-computer_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000204_simple-computer_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000208_fiction-ex_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000209_copy-of-computing-and-internet-ex_125.jpeg",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000215.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000224_141-inch-laptop_125.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000230_desktop-pc-with-cdrw_125.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000231_elite-desktop-pc_125.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000232_notebooks_125.png",
+    "GET demowebshop.tricentis.com/content/images/thumbs/0000240.png",
+    "GET demowebshop.tricentis.com/desktops",
+    "GET demowebshop.tricentis.com/login",
+    "GET demowebshop.tricentis.com/register",
+    "GET demowebshop.tricentis.com/wishlist",
+    "GET ssl.google-analytics.com/__utm.gif",
+    "GET ssl.google-analytics.com/ga.js",
+    "GET ssl.google-analytics.com/r/__utm.gif"
+  ],
+  "undecided": [],
+  "default_never_keywords": [
+    "reset",
+    "purge",
+    "delete-account",
+    "payment",
+    "email",
+    "bulk",
+    "export-all",
+    "import",
+    "upload",
+    "batch",
+    "checkout",
+    "purchase",
+    "logout",
+    "unsubscribe"
+  ]
+}

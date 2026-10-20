@@ -33,33 +33,57 @@ class LiveSnapshotter:
             )
     """
 
-    def __init__(self, vault: VaultWriter):
+    def __init__(self, vault: VaultWriter, auth_state=None):
         # A bare HeadlessCrawler instance, used only for its _snapshot()/
         # _goto_resilient()/_settle() helpers -- never call .crawl() or
         # .seed() on it, it isn't seeded and isn't meant to explore
         # anything on its own.
-        self._crawler = HeadlessCrawler(vault=vault, verbose=False)
+        self._crawler = HeadlessCrawler(vault=vault, verbose=False, auth_state=auth_state)
         self._pw = None
         self._browser = None
         self._context = None
         self._page = None
+        self._gate = None
 
     def __enter__(self) -> "LiveSnapshotter":
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=True)
-        self._context = self._browser.new_context()
-        self._page = self._context.new_page()
-        return self
+        try:
+            self._browser = self._pw.chromium.launch(headless=True)
+            from capture_app.env import load_project_env
+            load_project_env()
+            self._context = self._crawler._new_safe_context(self._browser, "")
+            self._gate = self._crawler.safety_gate
+            self._page = self._context.new_page()
+            self._page.set_default_timeout(5000)
+            self._page.set_default_navigation_timeout(10000)
+            return self
+        except Exception:
+            if self._browser is not None:
+                self._browser.close()
+            self._pw.stop()
+            raise
 
     def __exit__(self, exc_type, exc, tb):
-        if self._browser is not None:
-            self._browser.close()
-        if self._pw is not None:
-            self._pw.stop()
+        try:
+            if self._browser is not None:
+                self._browser.close()
+        finally:
+            try:
+                if self._gate is not None:
+                    self._gate.close()
+                    from capture_app.safety_gate.review import review_if_interactive
+                    review_if_interactive(str(self._gate.decisions.path))
+            finally:
+                if self._pw is not None:
+                    self._pw.stop()
 
     def snapshot(self, url: str):
         """live_snapshot_fn(url) -> (url, list[Interactable])."""
+        if self._gate is not None:
+            self._gate.set_trigger(self._page.url or url, "Snapshot page")
         self._crawler._goto_resilient(self._page, url)
         self._crawler._settle(self._page)
         items = self._crawler._snapshot(self._page)
+        if self._gate is not None:
+            self._gate.checkpoint("Snapshot page", self._page.url, "ok")
         return self._page.url, items
