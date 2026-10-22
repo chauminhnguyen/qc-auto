@@ -11,12 +11,22 @@ import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from .llm import extract
+from .llm import extract, extract_sources
 from .notes import discover_notes, parse_note
 from .vault_reader import EntityCatalog, build_entity_catalog, normalize_name, read_only_connection
 
 
 MAX_BLOCK_CHARS = 20_000
+
+
+def extract_combined_sources(vault_path: Path, markdown: str, provider) -> dict:
+    """Extract validated items from a Jira-first, source-marked combined input."""
+    db = read_only_connection(Path(vault_path).resolve())
+    try:
+        catalog = build_entity_catalog(Path(vault_path).resolve(), db)
+    finally:
+        db.close()
+    return extract_sources(markdown, catalog, provider)
 
 
 def _dump(value) -> str:

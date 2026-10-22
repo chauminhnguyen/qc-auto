@@ -1,0 +1,81 @@
+{
+  "issues": [
+    {
+      "key": "SD-1",
+      "depth": 0,
+      "parent_key": null,
+      "parent_keys": [],
+      "issue": {
+        "key": "SD-1",
+        "fields": {
+          "summary": "Login button disappears",
+          "issuetype": {"name": "Task"},
+          "status": {"name": "Done"},
+          "priority": {"name": "Medium"},
+          "assignee": {"displayName": "Lake Uchiha"},
+          "reporter": {"displayName": "Lake Uchiha"},
+          "created": "2026-10-21T21:34:44+0700",
+          "updated": "2026-10-21T21:37:00+0700",
+          "labels": [],
+          "description": "The login button disappears after a cookie session is restored."
+        }
+      },
+      "comments": [
+        {
+          "id": "10000",
+          "created": "2026-10-21T21:36:53+0700",
+          "updated": "2026-10-21T21:36:53+0700",
+          "author": {"displayName": "Lake Uchiha"},
+          "body": "The login cookie automatically signs the user in again."
+        }
+      ]
+    },
+    {
+      "key": "SD-2",
+      "depth": 1,
+      "parent_key": "SD-1",
+      "parent_keys": ["SD-1"],
+      "issue": {
+        "key": "SD-2",
+        "fields": {
+          "summary": "No gender selection in personal settings",
+          "issuetype": {"name": "Sub-task"},
+          "status": {"name": "Done"},
+          "priority": {"name": "Medium"},
+          "assignee": null,
+          "reporter": {"displayName": "Lake Uchiha"},
+          "created": "2026-10-22T20:26:41+0700",
+          "updated": "2026-10-22T20:28:03+0700",
+          "labels": [],
+          "description": "There is no gender selection in personal settings."
+        }
+      },
+      "comments": []
+    },
+    {
+      "key": "SD-3",
+      "depth": 1,
+      "parent_key": "SD-1",
+      "parent_keys": ["SD-1"],
+      "issue": {
+        "key": "SD-3",
+        "fields": {
+          "summary": "Cannot change password",
+          "issuetype": {"name": "Sub-task"},
+          "status": {"name": "To Do"},
+          "priority": {"name": "Medium"},
+          "assignee": null,
+          "reporter": {"displayName": "Lake Uchiha"},
+          "created": "2026-10-22T20:30:29+0700",
+          "updated": "2026-10-22T20:30:29+0700",
+          "labels": [],
+          "description": "The user cannot change or reset a password."
+        }
+      },
+      "comments": []
+    }
+  ],
+  "truncated": false,
+  "roots": ["SD-1"],
+  "max_issues": 100
+}

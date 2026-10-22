@@ -35,8 +35,10 @@ permanently remove -- typically after capture.py and before enrich.py.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,6 +77,7 @@ GRAPH_COLOR_GROUPS = {
     "path:Knowledge/Changes": 15680580,     # #ef4444 red
     "path:Knowledge/Reports": 440020,       # #06b6d4 cyan
     "path:Knowledge/QUESTIONS.md": 15337224, # #eab308 yellow
+    "path:Jira": 8700950,                   # #84cc16 lime
 }
 
 
@@ -398,6 +401,49 @@ class VaultWriter:
         self._init_schema()
         self._normalize_screenshot_paths()
         self.ensure_graph_colors()
+
+    def write_jira_note(self, issue_key: str, markdown: str) -> Path:
+        """Atomically write an owned Jira note without replacing user notes."""
+        issue_key = str(issue_key).upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*-\d+", issue_key):
+            raise ValueError(f"Invalid Jira issue key for note path: {issue_key}")
+        note_dir = self.vault_path / "Jira"
+        note_path = note_dir / f"{issue_key}.md"
+        frontmatter = (
+            "---\n"
+            'capture_generated: "jira"\n'
+            f'jira_key: "{issue_key}"\n'
+            "---\n\n"
+        )
+        content = frontmatter + markdown.rstrip() + "\n"
+        with self.lock:
+            note_dir.mkdir(parents=True, exist_ok=True)
+            if note_path.exists():
+                current = note_path.read_text(encoding="utf-8")
+                header = re.match(r"(?s)^---\r?\n(.*?)\r?\n---(?:\r?\n|$)", current)
+                owned = bool(header and re.search(r'(?m)^capture_generated:\s*["\']?jira["\']?\s*$', header.group(1)))
+                key_match = re.search(r'(?m)^jira_key:\s*["\']?([^"\'\s]+)["\']?\s*$', header.group(1)) if header else None
+                if not owned or not key_match or key_match.group(1).upper() != issue_key:
+                    raise FileExistsError(
+                        f"Refusing to overwrite unowned vault note: {note_path}"
+                    )
+            fd, temp_name = tempfile.mkstemp(prefix=f".{issue_key}-", suffix=".tmp", dir=note_dir)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temp_name, note_path)
+            except BaseException:
+                try:
+                    os.unlink(temp_name)
+                except OSError:
+                    pass
+                raise
+        return note_path
+
+    def close(self) -> None:
+        self.conn.close()
 
     # ------------------------------------------------------------------
     def ensure_graph_colors(self, color_groups: dict | None = None):

@@ -37,3 +37,31 @@ sync:
   stale_after_runs: 2
   max_delete_fraction: 0.20
 
+# Jira retrieval defaults. Credentials remain in JIRA_* environment variables.
+knowledge_jira:
+  scope:
+    depth: 2
+    max_issues: 100
+    include_bugs: false
+    link_types: []
+  comments:
+    filter_noise: true
+  retrieval:
+    top_k: 10
+    query_terms: 12
+    # Quote every token: YAML 1.1 treats words such as "on" as booleans.
+    stopwords: ["a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have", "in", "is", "it", "of", "on", "or", "the", "this", "that", "to", "was", "were", "with"]
+    relative_threshold: 0.55
+    min_matched_terms: 2
+    rrf_k: 60
+    anchor_weight: 1.5
+    bm25_weight: 1.0
+    dense_weight: 1.0
+    chunk_chars: 8000
+  graph:
+    weight: 0.15
+    seeds: 5
+  dense:
+    enabled: false
+    model: ""
+

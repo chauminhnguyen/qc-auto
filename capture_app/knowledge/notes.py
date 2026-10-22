@@ -77,7 +77,8 @@ def parse_note(path: Path, notes_root: Path) -> list[NoteBlock]:
         if not line.strip():
             if current and not explicit_key:
                 flush(index - 1)
-            start = index + 1
+            if not current:
+                start = index + 1
             continue
         if not current:
             start = index
@@ -95,3 +96,24 @@ def discover_notes(notes_root: Path) -> list[Path]:
         raise FileNotFoundError(f"Notes folder not found: {root}")
     return sorted(p for p in root.rglob("*") if p.is_file()
                   and p.suffix.casefold() in {".md", ".txt"})
+
+
+def load_note_documents(notes_root: Path):
+    """Load raw note blocks as shared source documents with explicit markers."""
+    from .sources import SourceDocument
+
+    notes_root = Path(notes_root).resolve()
+    documents = []
+    for path in discover_notes(notes_root):
+        root = notes_root if notes_root.is_dir() else notes_root.parent
+        for block in parse_note(path, root):
+            heading = next((line.lstrip("# ").strip() for line in block.text.splitlines()
+                            if line.startswith("#")), path.stem)
+            documents.append(SourceDocument(
+                source_type="notes", id=block.locator, title=heading,
+                markdown=block.text,
+                metadata={"file": block.source, "block_key": block.block_key,
+                          "line_start": block.line_start, "line_end": block.line_end,
+                          "sha256": block.sha256},
+            ))
+    return documents

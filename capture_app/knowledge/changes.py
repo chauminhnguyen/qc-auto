@@ -211,7 +211,8 @@ def _proposal_summary(raw_summary: object, note: str) -> str:
 
 def propose(vault: Path, note: str, ticket_id: str, provider_kind: str, model: str | None = None,
             local_url: str | None = None, local_model: str | None = None,
-            include_third_party: bool = False) -> dict:
+            include_third_party: bool = False,
+            claude_model: str | None = None) -> dict:
     vault = Path(vault).resolve()
     note = note.strip()
     if not note:
@@ -241,7 +242,8 @@ def propose(vault: Path, note: str, ticket_id: str, provider_kind: str, model: s
             return proposal
         current = {e["id"]: store.current_contract(e["id"])[1] for e in entities}
         system, user = _prompt(note, ticket_id, entities, requirements, current)
-        raw = provider_from_args(provider_kind, model, local_url, local_model).complete_json(system, user)
+        raw = provider_from_args(provider_kind, model, local_url, local_model,
+                                 claude_model).complete_json(system, user)
         if not isinstance(raw, dict):
             raise ValueError("LLM response must be a JSON object")
         by_id = {e["id"]: e for e in entities}
