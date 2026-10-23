@@ -11,14 +11,17 @@ class SearchEngine:
 
     def search(self, query: str, limit: int = 10, note_type: str | None = None) -> list[dict]:
         results = self.db.search(query, limit=limit, note_type=note_type)
-        alias_hits = self.db.search_by_alias(query, limit=limit)
-        merged = {row["id"]: row for row in results}
-        for row in alias_hits:
-            merged.setdefault(row["id"], row)
-        ordered = list(merged.values())
-        if not ordered:
-            return []
-        return ordered[:limit]
+        per_note: dict[str, int] = {}
+        limited = []
+        for row in results:
+            path = str(row.get("source_path") or "")
+            if per_note.get(path, 0) >= 2:
+                continue
+            per_note[path] = per_note.get(path, 0) + 1
+            limited.append(row)
+            if len(limited) >= limit:
+                break
+        return limited
 
     def expand_related(self, matches: list[dict], limit: int = 10) -> list[dict]:
         if not matches:
@@ -37,7 +40,10 @@ class SearchEngine:
         if not targets:
             return matches
         merged = {row["id"]: dict(row) for row in matches}
-        rows = self.db.conn.execute("SELECT * FROM chunks").fetchall()
+        rows = self.db.conn.execute("""
+            SELECT c.id,f.path AS source_path,c.text AS body
+            FROM chunks c JOIN files f ON f.id=c.file_id
+        """).fetchall()
         for row in rows:
             row_obj = dict(row)
             try:

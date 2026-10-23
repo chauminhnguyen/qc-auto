@@ -83,15 +83,16 @@ class ChatCrawlIngestTests(unittest.TestCase):
         db = build_index(self.vault)
         try:
             row = db.conn.execute(
-                "SELECT * FROM chunks WHERE note_type='crawler-transition'"
+                "SELECT c.* FROM chunks c JOIN files f ON f.id=c.file_id "
+                "WHERE f.path LIKE 'ui_transitions/%'"
             ).fetchone()
             self.assertIsNotNone(row)
-            self.assertIn("Add to wishlist", row["body"])
-            self.assertIn("POST https://shop.example.test/addtowishlist/42", row["body"])
-            self.assertIn("Navigate to https://shop.example.test/item", row["body"])
+            self.assertIn("Add to wishlist", row["text"])
+            self.assertIn("POST https://shop.example.test/addtowishlist/42", row["text"])
+            self.assertIn("Navigate to https://shop.example.test/item", row["text"])
             self.assertEqual(
                 db.conn.execute(
-                    "SELECT value FROM index_state WHERE key='indexed_ui_transitions'"
+                    "SELECT value FROM meta WHERE key='indexed_ui_transitions'"
                 ).fetchone()[0],
                 "1",
             )
@@ -152,13 +153,15 @@ class ChatCrawlIngestTests(unittest.TestCase):
         try:
             self.assertEqual(
                 db.conn.execute(
-                    "SELECT COUNT(*) FROM chunks WHERE source_path LIKE 'live_runner/%'"
+                    "SELECT COUNT(*) FROM chunks c JOIN files f ON f.id=c.file_id "
+                    "WHERE f.path LIKE 'live_runner/%'"
                 ).fetchone()[0],
                 3,
             )
             self.assertEqual(
                 db.conn.execute(
-                    "SELECT COUNT(*) FROM chunks WHERE note_type='crawler-transition'"
+                    "SELECT COUNT(*) FROM chunks c JOIN files f ON f.id=c.file_id "
+                    "WHERE f.path LIKE 'ui_transitions/%'"
                 ).fetchone()[0],
                 0,
             )

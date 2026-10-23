@@ -26,3 +26,6 @@ __pycache__/
 /testcases.xlsx
 /.testcase_gen_brd_progress.json
 /.testcase_gen_cache.json
+auth-state.json
+.pytest-tmp/
+*/.pytest-tmp/

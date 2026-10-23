@@ -139,6 +139,7 @@ def index_ui_transitions(vault_path: str | Path, chat_db: ChatDB) -> int:
     """Copy persisted crawler paths into chat search without writing to capture DB."""
     capture_db_path = Path(vault_path).resolve() / ".capture_index" / "index.sqlite"
     if not capture_db_path.is_file():
+        _prune_ui_transitions(chat_db, set())
         return 0
     uri = capture_db_path.as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True)) as source:
@@ -148,6 +149,7 @@ def index_ui_transitions(vault_path: str | Path, chat_db: ChatDB) -> int:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ui_transitions'"
             ).fetchone()
             if exists is None:
+                _prune_ui_transitions(chat_db, set())
                 return 0
             columns = {
                 row["name"] for row in source.execute("PRAGMA table_info(ui_transitions)")
@@ -171,7 +173,20 @@ def index_ui_transitions(vault_path: str | Path, chat_db: ChatDB) -> int:
             raise RuntimeError(f"Unable to read crawler transitions from {capture_db_path}: {error}") from error
     for row in rows:
         _insert_transition(chat_db, row)
+    _prune_ui_transitions(chat_db, {
+        f"ui_transitions/{row['crawl_id']}/{row['id']}" for row in rows
+    })
     return len(rows)
+
+
+def _prune_ui_transitions(chat_db: ChatDB, expected: set[str]) -> None:
+    existing = chat_db.conn.execute(
+        "SELECT id,path FROM files WHERE path LIKE 'ui_transitions/%'"
+    ).fetchall()
+    for row in existing:
+        if row["path"] not in expected:
+            chat_db.conn.execute("DELETE FROM chunks WHERE file_id=?", (row["id"],))
+            chat_db.conn.execute("DELETE FROM files WHERE id=?", (row["id"],))
 
 
 def index_live_runner_run(
@@ -309,5 +324,6 @@ def index_live_runner_run(
             })
             inserted += 1
     finally:
+        db.conn.commit()
         db.close()
     return inserted

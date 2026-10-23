@@ -32,7 +32,7 @@ class ChatSearchTests(unittest.TestCase):
         results = self.db.search("What is known about checkout?")
 
         self.assertTrue(results)
-        self.assertEqual(results[0]["id"], "checkout-flow")
+        self.assertEqual(results[0]["source_path"], "Flows/checkout.md")
 
     def test_query_with_only_stopwords_returns_no_results(self):
         self.assertEqual(self.db.search("what is this about"), [])

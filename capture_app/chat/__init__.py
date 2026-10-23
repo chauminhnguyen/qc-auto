@@ -2,7 +2,7 @@
 
 from .config import ChatConfig
 from .db import ChatDB
-from .ingest import build_index
+from .ingest import Summary, build_index, refresh_index
 from .retriever import SearchEngine
 
-__all__ = ["ChatConfig", "ChatDB", "build_index", "SearchEngine"]
+__all__ = ["ChatConfig", "ChatDB", "Summary", "build_index", "refresh_index", "SearchEngine"]

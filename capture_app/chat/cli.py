@@ -11,18 +11,16 @@ from .usage_cost import UsageTracker
 
 from .config import ChatConfig
 from .db import ChatDB
-from .ingest import build_index
+from .ingest import refresh_index
 from .llm import provider_from_env
 from .retriever import SearchEngine
 
 
 def _format_result(row: dict) -> str:
     return (
-        f"[{row.get('note_type', 'note')}] {row.get('title', row.get('source_path'))}\n"
-        f"feature: {row.get('feature') or 'n/a'}\n"
-        f"status: {row.get('status') or 'unknown'}\n"
         f"source: {row.get('source_path', 'n/a')}\n"
-        f"body: {row.get('body','')}"
+        f"heading: {row.get('heading_path') or row.get('title') or 'n/a'}\n"
+        f"body: {row.get('text', row.get('body', ''))}"
     )
 
 
@@ -30,9 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build and query the separate vault chat index")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    index_cmd = subparsers.add_parser("build-index", help="Rebuild the chat SQLite index from the vault")
+    index_cmd = subparsers.add_parser("build-index", help="Refresh the chat SQLite index from the vault")
     index_cmd.add_argument("--vault", type=Path, default=Path("./ObsidianVault"))
     index_cmd.add_argument("--db", type=Path, default=None)
+    index_cmd.add_argument("--full", action="store_true", help="rebuild the index into a temporary database")
+    index_cmd.add_argument("--exclude", action="append", default=[], help="exclude a vault-relative path glob; repeatable")
 
     query_cmd = subparsers.add_parser("search", help="Search the chat index")
     query_cmd.add_argument("--vault", type=Path, default=Path("./ObsidianVault"))
@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask_cmd.add_argument("--db", type=Path, default=None)
     ask_cmd.add_argument("query", help="Question to answer")
     ask_cmd.add_argument("--limit", type=int, default=5)
+    ask_cmd.add_argument("--no-refresh", action="store_true", help="skip the automatic index refresh")
     ask_cmd.add_argument("--provider", default=None)
     ask_cmd.add_argument("--model", default=None)
     ask_cmd.add_argument("--api-base", default=None)
@@ -58,8 +59,18 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = ChatConfig.from_args(args)
     if args.command == "build-index":
-        db = build_index(cfg.vault_path, cfg.db_path)
-        print(json.dumps({"db": str(db.db_path), "indexed": db.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]}, ensure_ascii=False))
+        summary = refresh_index(cfg.vault_path, excludes=args.exclude, db_path=cfg.db_path, full=args.full)
+        print(json.dumps({
+            "db": str(cfg.db_path or (cfg.vault_path / ".chat_index" / "index.sqlite")),
+            "indexed": summary.total_chunks,
+            "added": summary.added,
+            "updated": summary.updated,
+            "removed": summary.removed,
+            "unchanged": summary.unchanged,
+            "total_chunks": summary.total_chunks,
+            "elapsed_seconds": round(summary.elapsed_seconds, 3),
+            "schema_rebuilt": summary.schema_rebuilt,
+        }, ensure_ascii=False))
         return 0
 
     db = ChatDB(cfg.db_path or (args.vault / ".chat_index" / "index.sqlite"))
@@ -70,6 +81,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "ask":
+        if not args.no_refresh:
+            summary = refresh_index(cfg.vault_path, db_path=cfg.db_path)
+            if summary.changed:
+                print(f"Chat index refreshed: +{summary.added} added, {summary.updated} updated, "
+                      f"-{summary.removed} removed.")
         results = engine.search(args.query, limit=args.limit)
         tracker = UsageTracker()
         tracker.start_question()

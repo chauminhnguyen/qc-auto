@@ -114,6 +114,11 @@ def main(argv: list[str] | None = None) -> int:
             provider = provider_from_args(args.provider, args.model, args.local_url,
                                           args.local_model, args.claude_model)
             notes_result = ingest(args.vault, args.notes, provider, force=args.force)
+        try:
+            from capture_app.chat.ingest import refresh_index
+            refresh_index(args.vault)
+        except Exception as error:
+            print(f"WARNING: chat index refresh failed after knowledge ingest: {error}")
         result = {"jira": jira_result, "notes": notes_result}
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
         return 1 if jira_result.get("errors") else 0
