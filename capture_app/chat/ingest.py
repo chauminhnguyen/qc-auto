@@ -54,9 +54,15 @@ def _infer_note_type(path: Path, frontmatter: dict) -> str:
     if isinstance(note_type, str) and note_type.strip():
         return note_type.strip()
     rel = path.relative_to(path.anchor if len(path.parts) > 1 else path)
-    for segment in ("Knowledge", "APIs", "Params", "Flows"):
+    for segment in ("Knowledge", "APIs", "Params", "Flows", "Jira"):
         if segment in rel.parts:
-            return segment[:-1].lower() if segment != "Knowledge" else "knowledge"
+            return {
+                "Knowledge": "knowledge",
+                "APIs": "api",
+                "Params": "param",
+                "Flows": "flow",
+                "Jira": "jira",
+            }[segment]
     return path.suffix[1:] or "note"
 
 
@@ -137,7 +143,7 @@ def build_index(vault_path: str | Path, db_path: str | Path | None = None) -> Ch
             "title": title,
             "feature": feature,
             "status": status,
-            "owner": "human" if "Knowledge" in relative else "crawler",
+            "owner": "human" if "Knowledge" in relative else ("jira" if note_type == "jira" else "crawler"),
             "last_verified": frontmatter.get("last_verified") if isinstance(frontmatter.get("last_verified"), str) else None,
             "confirmed_by": frontmatter.get("confirmed_by") if isinstance(frontmatter.get("confirmed_by"), list) else [],
             "linked_entities": links,

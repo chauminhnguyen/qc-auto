@@ -42,7 +42,9 @@ class ChatConfig:
 
     @classmethod
     def from_vault(cls, vault_path: str | Path | None = None, **overrides):
-        load_project_env()
+        # Chat model/provider settings should have one source of truth: the
+        # project .env, even if this PowerShell session has stale variables.
+        load_project_env(override=True)
         vault = Path(vault_path or os.environ.get("CAPTURE_VAULT_PATH", "./ObsidianVault")).resolve()
         provider = overrides.pop("provider", None) or os.environ.get("CHAT_PROVIDER", "local")
         provider = provider.lower()

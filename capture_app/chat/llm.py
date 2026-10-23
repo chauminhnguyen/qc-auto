@@ -89,7 +89,7 @@ class ChatCompletionClient:
 
 
 def provider_from_env(provider: str | None = None, api_base: str | None = None, model: str | None = None, api_key: str | None = None):
-    load_project_env()
+    load_project_env(override=True)
     provider = (provider or os.environ.get("CHAT_PROVIDER") or "local").lower()
     model = model or os.environ.get("CHAT_MODEL")
     if not model:
