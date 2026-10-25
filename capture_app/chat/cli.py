@@ -11,14 +11,17 @@ from .usage_cost import UsageTracker
 
 from .config import ChatConfig
 from .db import ChatDB
+from . import graph_config
 from .ingest import refresh_index
 from .llm import provider_from_env
 from .retriever import SearchEngine
 
 
 def _format_result(row: dict) -> str:
+    label = row.get("context_label")
+    heading = f"[{label}]\n" if label else ""
     return (
-        f"source: {row.get('source_path', 'n/a')}\n"
+        f"{heading}source: {row.get('source_path', 'n/a')}\n"
         f"heading: {row.get('heading_path') or row.get('title') or 'n/a'}\n"
         f"body: {row.get('text', row.get('body', ''))}"
     )
@@ -46,6 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
     ask_cmd.add_argument("query", help="Question to answer")
     ask_cmd.add_argument("--limit", type=int, default=5)
     ask_cmd.add_argument("--no-refresh", action="store_true", help="skip the automatic index refresh")
+    ask_cmd.add_argument("--no-expand", action="store_true", help="use only direct search matches")
+    ask_cmd.add_argument("--expand-budget", type=int, default=graph_config.EXPAND_BUDGET_CHARS,
+                         help="maximum context characters when graph expansion is enabled")
+    ask_cmd.add_argument("--debug-graph", action="store_true", help="print included graph passages and scores")
     ask_cmd.add_argument("--provider", default=None)
     ask_cmd.add_argument("--model", default=None)
     ask_cmd.add_argument("--api-base", default=None)
@@ -94,7 +101,19 @@ def main(argv: list[str] | None = None) -> int:
             render_answer(result, question=args.query, usage=tracker.question_summary())
             print(json.dumps({"answer": result["answer"], "source_ids": [], "questions_for_BA": [args.query]}, ensure_ascii=False))
             return 0
-        context = "\n\n---\n\n".join(_format_result(row) for row in results)
+        prompt_results = results
+        if not args.no_expand:
+            prompt_results = engine.expand_context(results, budget_chars=args.expand_budget)
+            if args.debug_graph:
+                for row in prompt_results:
+                    print(
+                        f"graph {row.get('origin')} path={row.get('source_path')} "
+                        f"chunks={row.get('chunk_ids', [row.get('id')])} edge={row.get('edge_kind')} "
+                        f"weight={float(row.get('edge_weight', 1.0)):.3f} "
+                        f"score={float(row.get('final_score', 0.0)):.3f}",
+                        file=sys.stderr,
+                    )
+        context = "\n\n---\n\n".join(_format_result(row) for row in prompt_results)
         client = provider_from_env(
             provider=cfg.provider,
             api_base=cfg.api_base,

@@ -6,7 +6,7 @@ import unicodedata
 from pathlib import Path
 
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 
 def normalize_alias(value: str) -> str:
@@ -40,7 +40,9 @@ class ChatDB:
                 version = row[0] if row else None
             except sqlite3.Error:
                 version = None
-        rebuilt = bool(tables and version != SCHEMA_VERSION)
+        # v2 is the current chunk schema; v3 adds graph tables additively so
+        # the derived FTS index and its row IDs survive the migration.
+        rebuilt = bool(tables and version not in {"2", SCHEMA_VERSION})
         if rebuilt:
             # The index is derived data. Drop legacy tables, including FTS virtual tables.
             objects = self.conn.execute(
@@ -92,12 +94,32 @@ class ChatDB:
                 INSERT INTO chunks_fts(rowid, heading_path, text)
                 VALUES (new.id, new.heading_path, new.text);
             END;
+            CREATE TABLE IF NOT EXISTS edges(
+                src TEXT NOT NULL,
+                dst TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                weight REAL NOT NULL,
+                PRIMARY KEY(src,dst,kind)
+            );
+            CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src);
+            CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst);
+            CREATE TABLE IF NOT EXISTS note_entities(
+                note_path TEXT NOT NULL,
+                term TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                PRIMARY KEY(note_path,term,kind)
+            );
+            CREATE INDEX IF NOT EXISTS idx_note_entities_term ON note_entities(term);
         """)
         self.conn.execute("""
             INSERT INTO meta(key,value) VALUES('schema_version',?)
             ON CONFLICT(key) DO UPDATE SET value=excluded.value
             WHERE meta.value IS NOT excluded.value
         """, (SCHEMA_VERSION,))
+        self.conn.execute("""
+            INSERT INTO meta(key,value) VALUES('graph_backfilled','0')
+            ON CONFLICT(key) DO NOTHING
+        """)
         self.conn.commit()
         self.schema_rebuilt = rebuilt
         return rebuilt
@@ -114,7 +136,7 @@ class ChatDB:
             return []
         match = " OR ".join('"' + term.replace('"', '""') + '"' for term in terms)
         rows = self.conn.execute("""
-            SELECT c.id, f.path AS source_path, f.title, c.heading_path,
+            SELECT c.id, f.path AS source_path, f.title, c.heading_path, c.ord,
                    c.text AS body, c.text, bm25(chunks_fts) AS score
             FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid
             JOIN files f ON f.id=c.file_id

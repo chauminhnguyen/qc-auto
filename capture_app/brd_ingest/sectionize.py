@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .ir import PageChunk, SourceAnchor
 from .ledger import BrdLedger
+from .structure import brd_id as make_brd_id, extract_refs, slug, update_note
 
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$", re.MULTILINE)
@@ -27,12 +28,17 @@ def markdown_chunks(path: str | Path, file_hash: str = "") -> tuple[list[PageChu
         preface = text[:matches[0].start()].strip()
         if preface:
             pieces.append(("Introduction", preface))
+        stack: list[str] = []
         for i, match in enumerate(matches):
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             title = match.group(2).strip()
+            level = len(match.group(1))
+            stack = stack[:level - 1]
+            stack.append(title)
+            section_path = " > ".join(stack)
             # Heading sections retain nested headings as part of the parent content;
             # split at every heading for reliable source anchors and review.
-            pieces.append((title, text[match.start():end].strip()))
+            pieces.append((section_path, text[match.start():end].strip()))
     chunks: list[PageChunk] = []
     for index, (title, body) in enumerate(pieces):
         section_id = hashlib.sha256(f"{source}|{file_hash}|{index}|{title}".encode()).hexdigest()[:16]
@@ -56,12 +62,23 @@ def build_raw_section_notes(source: str | Path, vault: str | Path,
     ledger.conn.execute("UPDATE sections SET status='superseded' WHERE source_path=?", (str(source_path),))
     ledger.conn.execute("DELETE FROM pages WHERE source_path=? AND file_hash=?", (str(source_path), file_hash))
     used_image_hashes: set[str] = set()
+    hub_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", source_path.stem).strip("-.") or "BRD"
+    hub_rel = f"BRDs/index/{hub_slug}.md"
+    note_paths = []
+    for order, chunk in enumerate(chunks):
+        section = (chunk.anchors[0].section if chunk.anchors else None) or f"Page {chunk.page_number}"
+        section_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", section).strip("-.")[:48] or "section"
+        note_paths.append(raw_root / f"{source_path.stem}-{file_hash[:8]}-{order + 1:02d}-{section_slug}.md")
     for order, chunk in enumerate(chunks):
         title = (chunk.anchors[0].section if chunk.anchors else None) or f"Page {chunk.page_number}"
         section_id = chunk.section_id or hashlib.sha256(f"{source_path}|{file_hash}|{chunk.page_number}|{title}".encode()).hexdigest()[:16]
-        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", title).strip("-.")[:48] or "section"
         section_hash = hashlib.sha256(chunk.markdown_text.encode("utf-8")).hexdigest()
-        note_path = raw_root / f"{source_path.stem}-{file_hash[:8]}-{order + 1:02d}-{slug}.md"
+        note_path = note_paths[order]
+        prev_rel = note_paths[order - 1].relative_to(vault_path).as_posix() if order else ""
+        next_rel = note_paths[order + 1].relative_to(vault_path).as_posix() if order + 1 < len(note_paths) else ""
+        section_path = title
+        stable_id = make_brd_id(source_path)
+        breadcrumb = f"{stable_id} > {section_path}"
         body = chunk.markdown_text
 
         def localize_image(match: re.Match[str]) -> str:
@@ -104,8 +121,18 @@ def build_raw_section_notes(source: str | Path, vault: str | Path,
         note = ("---\n" f"origin: brd\ntags: [brd-segment]\nsource_file: {safe(source_path.name)}\n"
                 f"source_version: {safe(version or 'unknown')}\nsource_section: {safe(title)}\n"
                 f"pages: {safe(chunk.page_number)}\nstatus: raw\nsource_hash: " + safe(file_hash) +
+                f"\nbrd_id: {safe(stable_id)}\npart_id: {safe(stable_id + '#' + slug(section_path))}\n"
+                f"section_path: {safe(section_path)}\norder: {order}\nparent: {safe(hub_rel)}\n"
+                f"prev: {safe(prev_rel)}\nnext: {safe(next_rel)}\nbreadcrumb: {safe(breadcrumb)}\nrefs: []" +
                 "\n---\n\n# Section: " + title + "\n\n## Source evidence\n\n" + body + "\n")
         note_path.write_text(note, encoding="utf-8")
+        nav = [f"Parent: [[{hub_rel[:-3]}]] | "
+               f"Prev: [[{prev_rel[:-3]}]] | "
+               f"Next: [[{next_rel[:-3]}]]"]
+        update_note(note_path, {"brd_id": stable_id, "part_id": f"{stable_id}#{slug(section_path)}",
+                               "section_path": section_path, "order": order, "parent": hub_rel,
+                               "prev": prev_rel, "next": next_rel, "breadcrumb": breadcrumb}, nav,
+                    extract_refs(vault_path, note))
         outputs.append(note_path)
         ledger.conn.execute("""INSERT INTO sections(id,source_path,file_hash,section_title,order_index,
           page_start,page_end,section_hash,raw_note_path,status) VALUES(?,?,?,?,?,?,?,?,?,'raw')

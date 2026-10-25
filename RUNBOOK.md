@@ -31,12 +31,15 @@ Run commands from the repository root. On Windows, use `\.venv\Scripts\python.ex
 ```powershell
 python capture.py
 # Use the visible browser, complete the flow, then type q and Enter to save.
+python vault.py
+# Enter the Obsidian vault path (or press Enter for .\ObsidianVault).
+# Select unwanted captured APIs by number/range, then type y to confirm removal.
 python -m capture_app.chat.cli build-index --vault .\ObsidianVault
 python -m capture_app.chat.cli search --vault .\ObsidianVault "add to cart" --limit 5
-python -m capture_app.chat.cli ask --vault .\ObsidianVault "What happens when a customer adds a product to the cart?"
+python -m capture_app.chat.cli ask --vault .\ObsidianVault --debug-graph "What happens when a customer adds a product to the cart?"
 ```
 
-`capture.py` writes captured API/session data to `.capture_index\index.sqlite` and renders Markdown notes under `APIs`, `Params`, and `Flows`. `build-index` refreshes the separate `.chat_index\index.sqlite`; run it after capture before asking about new data.
+`capture.py` writes captured API/session data to `.capture_index\index.sqlite` and renders Markdown notes under `APIs`, `Params`, and `Flows`. Run `vault.py` after capture to review and remove unwanted API entries before indexing. It previews the selected APIs and asks for confirmation. Removing an API also removes its API note and screenshots; parameter references are updated, and a parameter is removed only when no remaining API uses it. Cancel with `q` or decline the confirmation to make no changes. `build-index` refreshes the separate `.chat_index\index.sqlite`; run it after cleanup/capture before asking about new data (unless relying on `ask`'s automatic refresh).
 
 To use Anthropic directly for `chat.cli ask`, set these values in the project `.env`:
 
@@ -62,15 +65,19 @@ Open `ObsidianVault` in Obsidian and choose **Graph view**. If the vault is not 
 
 ### C. Add BRDs to the vault and ask about their requirements
 
-Put `.md`, `.txt`, `.pdf`, or `.docx` files in `BRDs\`, then run this single command to ingest them and refresh their Obsidian graph links:
+Put `.md`, `.txt`, `.pdf`, or `.docx` files in `BRDs\`, then ingest and index them before asking:
 
 ```powershell
 python -m capture_app.brd_ingest.cli ingest --root .\BRDs --vault .\ObsidianVault --db .\brd_inventory.sqlite
+python -m capture_app.chat.cli build-index --vault .\ObsidianVault
+python -m capture_app.chat.cli ask --vault .\ObsidianVault --debug-graph "What requirements apply to checkout?"
 ```
 
 `ingest` runs triage, extraction, raw-note creation, distillation, deterministic and LLM-assisted entity linking, Obsidian hub/backlink generation, and reporting. Each source BRD gets a hub note linked to its section notes and distilled requirement entries; those notes link back to the hub. Exact IDs, clear parameter-field matches, and sufficiently specific matches to screened captured response text are linked locally through their recorded API relationships. The semantic pass asks the configured LLM to match requirement wording to existing API, parameter, and flow notes, and allows it to return no match. The BRD Master Index connects all source hubs. It writes inventory/checkpoint data to `brd_inventory.sqlite` and notes under `ObsidianVault\BRDs\`. Tier C sources are listed for manual review and are not automatically distilled.
 
 Ingest runs semantic linking automatically; no extra flag is needed. The standalone `link` command also runs the semantic pass by default. The model may abstain; shared generic terms or unrelated products are not linked. It receives BRD requirement text, API-to-parameter relationships, concise parameter definitions, and screened examples from user-facing response fields. Raw request payloads, response bodies, and examples from other parameter types are not sent.
+
+`ask` searches the chat index and expands the matched BRD chunks with weighted graph neighbors, such as adjacent sections and linked API/parameter notes. `--debug-graph` prints the included chunks' source, edge kind, weight, and score to stderr so you can inspect why each passage was added. Use `--no-expand` for only the direct search matches, or `--expand-budget 12000` to raise the default context-character budget. The BRD `ingest` command refreshes BRD notes and links; follow it with `build-index` to refresh chat's separate index, then run `ask`. `ask` normally refreshes automatically too; use `--no-refresh` only when you intentionally want the existing index.
 
 BRD linking uses the shared `LLM_PROVIDER` setting (`openrouter` or `anthropic`) from the process environment or project `.env`; shell variables take precedence. OpenRouter uses `OPENROUTER_API_KEY` and `OPENROUTER_MODEL`; Anthropic uses `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL`. BRD linking calls the provider's existing JSON chat adapter once per 10 requirements, with retries disabled, and validates every returned entity path against the local vault catalog before writing links. Testcase generation reads the captured session and persisted live-run transitions locally and makes no model calls.
 
@@ -95,7 +102,7 @@ python -m capture_app.knowledge.cli ingest --vault .\ObsidianVault --notes .\Not
 python -m capture_app.knowledge.cli review --vault .\ObsidianVault
 python -m capture_app.knowledge.cli report --vault .\ObsidianVault
 python -m capture_app.chat.cli build-index --vault .\ObsidianVault
-python -m capture_app.chat.cli ask --vault .\ObsidianVault "What do the reviewed QC notes say about checkout?"
+python -m capture_app.chat.cli ask --vault .\ObsidianVault --debug-graph "What do the reviewed QC notes say about checkout?"
 ```
 
 Set the local provider URL/model in the environment if they differ from your local OpenAI-compatible endpoint. Review drafts before relying on them. Rebuild the chat index after review to include the reviewed notes.
@@ -212,7 +219,7 @@ requirement.
 python ui_transitions.py --vault .\ObsidianVault crawl --session <SESSION_ID> --crawl-id <CRAWL_ID>
 python ui_transitions.py --vault .\ObsidianVault find id --role request --resource-key "<DOMAIN:RESOURCE>"
 python -m capture_app.chat.cli build-index --vault .\ObsidianVault
-python -m capture_app.chat.cli ask --vault .\ObsidianVault "How can I set the id field?"
+python -m capture_app.chat.cli ask --vault .\ObsidianVault --debug-graph "How can I set the id field?"
 ```
 
 The crawl stores transitions and discovered API data in the capture database. Chat-index refresh reads the saved transitions. Use `--allow-submit` or `--allow-delete` only when you intend to permit those actions in a controlled test environment.
@@ -421,7 +428,7 @@ python -m capture_app.chat.cli search --vault .\ObsidianVault "subscribe button"
 Ask a question using the top search results as context:
 
 ```powershell
-python -m capture_app.chat.cli ask --vault .\ObsidianVault "What color should the subscribe button be?"
+python -m capture_app.chat.cli ask --vault .\ObsidianVault --debug-graph "What color should the subscribe button be?"
 ```
 
 The default provider is a local OpenAI-compatible chat-completions endpoint at `http://127.0.0.1:11434/v1/chat/completions`, suitable for Ollama when its compatible API is available. Start Ollama and make sure the configured model is installed before using `ask`. Override the provider settings with environment variables in PowerShell:
@@ -430,7 +437,7 @@ The default provider is a local OpenAI-compatible chat-completions endpoint at `
 $env:CHAT_PROVIDER = "local"
 $env:CHAT_API_BASE = "http://127.0.0.1:11434/v1/chat/completions"
 $env:CHAT_MODEL = "llama3.1"
-python -m capture_app.chat.cli ask --vault .\ObsidianVault "Explain the add-to-cart flow"
+python -m capture_app.chat.cli ask --vault .\ObsidianVault --debug-graph "Explain the add-to-cart flow"
 ```
 
 For OpenRouter, set the provider, model, and API key (the existing `OPENROUTER_API_KEY` variable is also recognized):
@@ -440,7 +447,7 @@ $env:CHAT_PROVIDER = "openrouter"
 $env:CHAT_API_BASE = "https://openrouter.ai/api/v1/chat/completions"
 $env:CHAT_MODEL = "<openrouter-model-id>"
 $env:OPENROUTER_API_KEY = "<your-key>"
-python -m capture_app.chat.cli ask --vault .\ObsidianVault "What is known about checkout?"
+python -m capture_app.chat.cli ask --vault .\ObsidianVault --debug-graph "What is known about checkout?"
 ```
 
 `ask` also accepts per-command `--provider`, `--api-base`, `--model`, and `--api-key` options. Avoid putting API keys directly in command history; prefer environment variables. `CHAT_TEMPERATURE` and `CHAT_MAX_TOKENS` configure generation. `CHAT_NUM_CTX` is currently read by the config but is not passed through to the provider request, so configure Ollama's context size separately.

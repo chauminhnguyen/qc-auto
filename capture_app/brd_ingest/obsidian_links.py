@@ -6,6 +6,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+from .structure import brd_id as make_brd_id, extract_refs, slug, update_note
+
 
 _START = "<!-- brd-ingest-links:start -->"
 _END = "<!-- brd-ingest-links:end -->"
@@ -69,16 +71,22 @@ def render_obsidian_links(vault: str | Path, inventory_db: str | Path,
     for source in sources:
         source_path = source["source_path"]
         source_sections = section_by_source.get((source_path, source["file_hash"]), [])
-        source_entries = entry_by_source.get(source_path, [])
+        section_order = {row["id"]: int(row["order_index"]) for row in source_sections}
+        source_entries = sorted(
+            entry_by_source.get(source_path, []),
+            key=lambda row: (section_order.get(row.get("section_id"), 10**9),
+                             str(row.get("title") or "").casefold()),
+        )
         if not source_sections and not source_entries:
             continue
-        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(source_path).stem).strip("-.") or "BRD"
-        hub = root / "BRDs" / "index" / f"{slug}-{source['file_hash'][:8]}.md"
+        source_slug = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(source_path).stem).strip("-.") or "BRD"
+        hub = root / "BRDs" / "index" / f"{source_slug}.md"
         hub.parent.mkdir(parents=True, exist_ok=True)
         hubs.append((source["file_name"], hub, source["file_hash"]))
 
         section_links: dict[str, str] = {}
         hub_lines = ["---", "origin: brd", "type: brd-hub",
+                     f"brd_id: {json.dumps(make_brd_id(source_path), ensure_ascii=False)}",
                      f"source_file: {json.dumps(source['file_name'], ensure_ascii=False)}",
                      f"source_hash: {source['file_hash']}", "---", "",
                      f"# {Path(source['file_name']).stem}", "", "## Sections", ""]
@@ -121,26 +129,67 @@ def render_obsidian_links(vault: str | Path, inventory_db: str | Path,
         hub.write_text("\n".join(hub_lines).rstrip() + "\n", encoding="utf-8")
         rendered_hubs += 1
 
+        hub_rel = hub.relative_to(root).as_posix()
+        stable_id = make_brd_id(source_path)
+        section_notes: list[tuple[dict, Path, str]] = []
+        for order, section in enumerate(source_sections):
+            note_path = Path(section["raw_note_path"] or "")
+            if not note_path.is_absolute():
+                note_path = root / note_path
+            if note_path.is_file():
+                rel = note_path.relative_to(root).as_posix()
+                section_path = str(section.get("section_title") or "Section")
+                section_notes.append((section, note_path, rel))
+                prev_rel = section_notes[order - 1][2] if order else ""
+                next_rel = ""
+                fields = {"brd_id": stable_id, "part_id": f"{stable_id}#{slug(section_path)}",
+                          "section_path": section_path, "order": order, "parent": hub_rel,
+                          "prev": prev_rel, "next": next_rel,
+                          "breadcrumb": f"{stable_id} > {section_path}"}
+                if order + 1 < len(source_sections):
+                    next_path = Path(source_sections[order + 1]["raw_note_path"] or "")
+                    if not next_path.is_absolute():
+                        next_path = root / next_path
+                    next_rel = next_path.relative_to(root).as_posix()
+                    fields["next"] = next_rel
+                nav = [f"Parent: {_wiki(root, hub, Path(source['file_name']).stem)} | "
+                       f"Prev: {_wiki(root, root / prev_rel) if prev_rel else 'none'} | "
+                       f"Next: {_wiki(root, root / next_rel) if next_rel else 'none'}"]
+                refs = extract_refs(root, note_path.read_text(encoding="utf-8", errors="replace"))
+                update_note(note_path, fields, nav, refs)
+
+        section_path_by_id = {row["id"]: (note_path, rel, str(row.get("section_title") or "Section"), order)
+                              for order, (row, note_path, rel) in enumerate(section_notes)}
+        entry_parts = []
+        for entry, data, entry_path in linked_entry_rows:
+            entry_parts.append((entry, data, entry_path))
+        for entry_order, (entry, data, entry_path) in enumerate(entry_parts):
+            entry_rel = entry_path.relative_to(root).as_posix()
+            section = section_path_by_id.get(entry.get("section_id"))
+            section_note, section_rel, section_path, section_order = section or (None, hub_rel, "Unsectioned", 0)
+            prev_rel = entry_parts[entry_order - 1][2].relative_to(root).as_posix() if entry_order else ""
+            next_rel = entry_parts[entry_order + 1][2].relative_to(root).as_posix() if entry_order + 1 < len(entry_parts) else ""
+            nav = [f"Parent: {_wiki(root, section_note or hub, section_path)} | "
+                   f"Prev: {_wiki(root, root / prev_rel) if prev_rel else 'none'} | "
+                   f"Next: {_wiki(root, root / next_rel) if next_rel else 'none'}"]
+            entry_id = str(data.get("source_id") or data.get("id") or entry["title"])
+            fields = {"brd_id": stable_id,
+                      "part_id": f"{stable_id}#{slug(section_path)}/{slug(entry_id)}",
+                      "section_path": section_path,
+                      "order": section_order * 1000 + entry_order,
+                      "parent": section_rel, "prev": prev_rel, "next": next_rel,
+                      "breadcrumb": f"{stable_id} > {section_path} > {entry_id}"}
+            refs = extract_refs(root, entry_path.read_text(encoding="utf-8", errors="replace"))
+            update_note(entry_path, fields, nav, refs)
+
         for section in source_sections:
             note_path = Path(section["raw_note_path"] or "")
             if not note_path.is_absolute():
                 note_path = root / note_path
             if note_path.is_file():
-                _replace_managed_block(note_path, _block(["## BRD navigation", "",
-                                                          f"- Main BRD: {_wiki(root, hub, Path(source['file_name']).stem)}"]))
                 rendered_backlinks += 1
 
         for entry, data, entry_path in linked_entry_rows:
-            lines = ["## BRD navigation", "", f"- Main BRD: {_wiki(root, hub, Path(source['file_name']).stem)}"]
-            # Resolve the entry's source section from the ledger section table.
-            if entry["section_id"]:
-                section_row = next((s for s in source_sections if s.get("id") == entry["section_id"]), None)
-                if section_row:
-                    section_path = Path(section_row["raw_note_path"] or "")
-                    if not section_path.is_absolute():
-                        section_path = root / section_path
-                    if section_path.is_file():
-                        lines.append(f"- Source section: {_wiki(root, section_path, section_row['section_title'])}")
             entities = explicit.get((source["file_name"], str(data.get("id") or entry["title"])), [])
             safe_entities = []
             for entity in entities:
@@ -158,9 +207,9 @@ def render_obsidian_links(vault: str | Path, inventory_db: str | Path,
                         evidence = "exact ID reference"
                     safe_entities.append(f"- {entity.get('kind', 'entity')}: "
                                          f"{_wiki(root, entity_path, entity.get('name'))} ({evidence})")
-            if safe_entities:
-                lines.extend(["", "## Captured entities matched by requirement fields", "", *safe_entities])
-            _replace_managed_block(entry_path, _block(lines))
+            entity_lines = (["## Captured entities matched by requirement fields", "", *safe_entities]
+                            if safe_entities else [])
+            _replace_managed_block(entry_path, _block(entity_lines))
             rendered_backlinks += 1
 
     master = root / "BRDs" / "BRD Master Index.md"

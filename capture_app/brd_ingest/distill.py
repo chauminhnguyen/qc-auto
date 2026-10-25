@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from .ledger import BrdLedger
+from .structure import brd_id as make_brd_id, extract_refs, slug, update_note
 
 
 def _cells(line: str) -> list[str]:
@@ -67,8 +68,11 @@ def distill_markdown(source: str | Path, vault: str | Path, ledger: BrdLedger,
     text = source_path.read_text(encoding="utf-8-sig", errors="replace") if chunks_override is None else ""
     version_match = re.search(r"\bversion\*{0,2}\s*:?\*{0,2}\s*([\w.-]+)", text, re.I)
     version = version_override or (version_match.group(1) if version_match else "unknown")
-    sections = {row["section_title"]: row["id"] for row in ledger.conn.execute(
-        "SELECT id,section_title FROM sections WHERE source_path=? AND file_hash=?", (str(source_path), file_hash))}
+    section_rows = [dict(row) for row in ledger.conn.execute(
+        "SELECT id,section_title,order_index,raw_note_path FROM sections WHERE source_path=? AND file_hash=? ORDER BY order_index",
+        (str(source_path), file_hash))]
+    sections = {row["section_title"]: row["id"] for row in section_rows}
+    sections_by_id = {row["id"]: row for row in section_rows}
     section_texts: list[tuple[str, str, int, str | None]] = []
     if chunks_override is not None:
         for chunk in chunks_override:
@@ -113,6 +117,29 @@ def distill_markdown(source: str | Path, vault: str | Path, ledger: BrdLedger,
                     f"acceptance_criteria:\n  - {esc(req['requirement'])}\n---\n\n"
                     f"# {canonical_id}\n\n## {body_heading}\n\n{req['requirement']}\n")
             note_path.write_text(note, encoding="utf-8")
+            section_row = sections_by_id.get(section_id or "", {})
+            section_path = str(section_row.get("section_title") or title)
+            parent_raw = section_row.get("raw_note_path")
+            parent_path = Path(parent_raw) if parent_raw else None
+            if parent_path is not None and not parent_path.is_absolute():
+                parent_path = Path(vault).resolve() / parent_path
+            if parent_path is not None and parent_path.is_file():
+                parent_rel = parent_path.relative_to(Path(vault).resolve()).as_posix()
+                parent_link = parent_rel[:-3]
+            else:
+                parent_rel = f"BRDs/index/{re.sub(r'[^A-Za-z0-9._-]+', '-', source_path.stem).strip('-.')}.md"
+                parent_link = parent_rel[:-3]
+            stable_id = make_brd_id(source_path)
+            breadcrumb = f"{stable_id} > {section_path} > {source_id}"
+            part_fields = {"brd_id": stable_id,
+                           "part_id": f"{stable_id}#{slug(section_path)}/{slug(source_id)}",
+                           "section_path": section_path,
+                           "order": int(section_row.get("order_index", 0)) * 1000 + len(created),
+                           "parent": parent_rel, "prev": "", "next": "",
+                           "breadcrumb": breadcrumb}
+            update_note(note_path, part_fields,
+                        [f"Parent: [[{parent_link}]] | Prev: none | Next: none"],
+                        extract_refs(vault, note))
             # Exact-source capture makes numeric/ID fidelity directly auditable.
             anchor = {"file": source_path.name, "section": title, "page": page_number,
                       "requirement_id": canonical_id, "source_requirement_id": source_id}

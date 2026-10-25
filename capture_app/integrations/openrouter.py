@@ -24,6 +24,7 @@ import json
 import os
 import random
 import time
+from email.utils import parsedate_to_datetime
 from capture_app.env import load_project_env
 
 load_project_env()
@@ -37,8 +38,8 @@ REASONING_EFFORT = os.environ.get("OPENROUTER_REASONING_EFFORT", "none").strip()
 # Transient upstream failures worth retrying -- these are the target model's
 # host (e.g. Nvidia) being overloaded/unreachable, not a problem with our
 # request, so a short backoff and another try is usually all it takes.
-RETRYABLE_STATUS_CODES = {408, 429, 502, 503, 504}
-RETRYABLE_ERROR_CODES = {408, 429, 502, 503, 504}
+RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504, 529}
+RETRYABLE_ERROR_CODES = {408, 429, 500, 502, 503, 504, 529}
 
 DEFAULT_MAX_RETRIES = int(os.environ.get("OPENROUTER_MAX_RETRIES", "3"))
 DEFAULT_RETRY_BACKOFF_SECONDS = float(os.environ.get("OPENROUTER_RETRY_BACKOFF", "2.0"))
@@ -77,7 +78,8 @@ def _sleep_backoff(attempt: int, base: float) -> None:
 def chat_json(system_prompt: str, user_prompt: str, model: str | None = None,
               temperature: float = 0.4, max_tokens: int | None = None,
               max_retries: int = DEFAULT_MAX_RETRIES,
-              retry_backoff: float = DEFAULT_RETRY_BACKOFF_SECONDS):
+              retry_backoff: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+              call_callback=None):
     """
     Calls OpenRouter, instructs the model to answer with JSON only, and
     parses that JSON. Raises OpenRouterError with a readable message on any
@@ -128,10 +130,11 @@ def chat_json(system_prompt: str, user_prompt: str, model: str | None = None,
     while True:
         attempt += 1
         try:
+            if call_callback:
+                call_callback()
             resp = httpx.post(OPENROUTER_URL, headers=headers, json=payload, timeout=60)
         except httpx.RequestError as e:
             if attempt <= max_retries:
-                print(f"  [openrouter] network error (attempt {attempt}/{max_retries + 1}): {e} -- retrying...")
                 _sleep_backoff(attempt, retry_backoff)
                 continue
             raise OpenRouterError(f"Network error calling OpenRouter: {e}") from e
@@ -160,8 +163,18 @@ def chat_json(system_prompt: str, user_prompt: str, model: str | None = None,
                 )
             retryable = resp.status_code in RETRYABLE_STATUS_CODES or error_code in RETRYABLE_ERROR_CODES
             if retryable and attempt <= max_retries:
-                print(f"  [openrouter] transient error (attempt {attempt}/{max_retries + 1}): {reason} -- retrying...")
-                _sleep_backoff(attempt, retry_backoff)
+                retry_after = resp.headers.get("retry-after")
+                try:
+                    delay = float(retry_after) if retry_after else None
+                except ValueError:
+                    try:
+                        delay = max(0.0, parsedate_to_datetime(retry_after).timestamp() - time.time())
+                    except (TypeError, ValueError, OverflowError):
+                        delay = None
+                if delay is None:
+                    _sleep_backoff(attempt, retry_backoff)
+                else:
+                    time.sleep(max(0.0, delay))
                 continue
             body_preview = data if data is not None else resp.text[:500]
             failure_kind = "rate_limited" if resp.status_code == 429 or error_code == 429 else None

@@ -11,13 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .db import ChatDB
+from .graph_index import sync_graph
 from .crawl_ingest import index_ui_transitions
 
 
 # Tune these two limits together: smaller chunks improve retrieval precision.
 TARGET_CHUNK_CHARS = 1200
 TINY_SECTION_CHARS = 150
-MANDATORY_EXCLUDED_DIRS = {".chat_index", ".obsidian", ".trash", ".git"}
+MANDATORY_EXCLUDED_DIRS = {".chat_index", ".check_cache", ".obsidian", ".trash", ".git"}
 
 
 @dataclass
@@ -219,7 +220,11 @@ def _chunks_for_file(path: Path, rel: str, raw: bytes) -> tuple[str, list[tuple[
     text = raw.decode("utf-8-sig")
     fields, body = _parse_frontmatter(text)
     title = _title(path, fields, body)
-    return title, _sections(body, title)
+    chunks = _sections(body, title)
+    breadcrumb = fields.get("breadcrumb")
+    if breadcrumb:
+        chunks = [(heading, f"{breadcrumb}\n\n{content}") for heading, content in chunks]
+    return title, chunks
 
 
 def _insert_file(db: ChatDB, rel: str, stat, raw: bytes, digest: str, title: str,
@@ -295,6 +300,8 @@ def _run_refresh(vault: Path, db_path: Path, excludes: list[str] | None, full: b
     try:
         with db.conn:
             previous = {row["path"]: row for row in db.conn.execute("SELECT * FROM files")}
+            changed_paths: set[str] = set()
+            deleted_paths: set[str] = set()
             for rel, path in sorted(found.items()):
                 stat = path.stat()
                 old = previous.pop(rel, None)
@@ -317,6 +324,7 @@ def _run_refresh(vault: Path, db_path: Path, excludes: list[str] | None, full: b
                     summary.unchanged += 1
                     continue
                 _insert_file(db, rel, stat, raw, digest, title, chunks)
+                changed_paths.add(rel)
                 if old:
                     summary.updated += 1
                 else:
@@ -327,12 +335,18 @@ def _run_refresh(vault: Path, db_path: Path, excludes: list[str] | None, full: b
                     continue
                 db.conn.execute("DELETE FROM chunks WHERE file_id=?", (old["id"],))
                 db.conn.execute("DELETE FROM files WHERE id=?", (old["id"],))
+                deleted_paths.add(rel)
                 summary.removed += 1
             # Re-index the read-only crawler evidence into synthetic file/chunk rows.
             indexed_transitions = index_ui_transitions(vault, db)
+            graph_backfilled = (db.conn.execute(
+                "SELECT value FROM meta WHERE key='graph_backfilled'"
+            ).fetchone() or ["0"])[0] != "1"
+            sync_graph(db, vault, changed_paths, deleted_paths,
+                       backfill=bool(full or graph_backfilled))
             db.set_state("indexed_ui_transitions", str(indexed_transitions))
             db.set_state("indexed_notes", str(len(found)))
-            db.conn.execute("INSERT INTO meta(key,value) VALUES('schema_version','2') "
+            db.conn.execute("INSERT INTO meta(key,value) VALUES('schema_version','3') "
                             "ON CONFLICT(key) DO NOTHING")
         if full or summary.added + summary.updated + summary.removed > 500:
             db.conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')")
