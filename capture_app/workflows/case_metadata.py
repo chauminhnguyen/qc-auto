@@ -40,6 +40,13 @@ def decode_payload(chunks: list[str], expected_digest: str) -> dict:
 
 def row_hash(visible_values: dict, payload: dict) -> str:
     design_values = {key: visible_values.get(key) for key in VISIBLE_HASH_FIELDS}
+    if not str(design_values.get("Expected Result") or "").strip():
+        design_values["Expected Result"] = None
+    # Keep old generated workbooks hash-compatible when they do not carry this
+    # supplemental field, while protecting its value in newly generated suites.
+    if "Generated Expected Result" in visible_values:
+        generated = visible_values.get("Generated Expected Result")
+        design_values["Generated Expected Result"] = generated if str(generated or "").strip() else None
     raw = (canonical_json({"schema_version": SCHEMA_VERSION,
                            "visible": design_values, "payload": payload})).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()

@@ -16,6 +16,9 @@ class IsolatedGenerationTestCase(unittest.TestCase):
     """Keep persistent model caches and resumable state out of unit tests."""
 
     def setUp(self):
+        self.provider_patch = patch.object(testcase_gen, "LLM_PROVIDER", "openrouter")
+        self.provider_patch.start()
+        self.addCleanup(self.provider_patch.stop)
         temp_root = Path(tempfile.mkdtemp(prefix="testcase-gen-tests-"))
         self.addCleanup(lambda: __import__("shutil").rmtree(temp_root, ignore_errors=True))
         original_cache = testcase_gen._ResponseCache
@@ -82,6 +85,15 @@ def group(ref_stem: str, name: str | None = None) -> dict:
 
 
 class GenerateBatchTests(IsolatedGenerationTestCase):
+    def test_anthropic_cache_call_omits_unsupported_temperature(self):
+        cache = testcase_gen._ResponseCache(Path("unused-cache.json"), enabled=False)
+        with patch.object(testcase_gen, "LLM_PROVIDER", "anthropic"), \
+             patch.object(testcase_gen, "messages_json", return_value={"ok": True}) as messages:
+            result = cache.chat_json("system", "user", model=None, max_tokens=100)
+
+        self.assertEqual(result, {"ok": True})
+        self.assertIsNone(messages.call_args.kwargs["temperature"])
+
     @staticmethod
     def write_knowledge_note(root: Path, *, note_id="K_subscribe", target="POST_subscribenewsletter",
                              status="unverified"):
@@ -230,7 +242,8 @@ class GenerateBatchTests(IsolatedGenerationTestCase):
             "real_response_status": 200,
             "precondition_flow_files": {},
         }
-        with patch.object(testcase_gen, "build_contexts", return_value=[captured, noneligible, discovery]), \
+        with patch.object(testcase_gen, "generate_supplemental_expected_results", side_effect=lambda rows, *_a, **_k: rows) as supplemental, \
+             patch.object(testcase_gen, "build_contexts", return_value=[captured, noneligible, discovery]), \
              patch.object(testcase_gen, "chat_json", return_value=[
                  group("eligible"),
                  group("read-only"),
@@ -244,6 +257,7 @@ class GenerateBatchTests(IsolatedGenerationTestCase):
         self.assertEqual(sum(row["Category"] != "happy-path" for row in rows), 1)
         captured_data = [row["Captured Request"] for row in rows if row["Category"] == "happy-path"]
         self.assertIn("field=value", captured_data)
+        supplemental.assert_called_once()
         sent_contexts = json.loads(chat.call_args.args[1])
         self.assertEqual([ctx["edge_case_eligible"] for ctx in sent_contexts], [True, False, False])
 
@@ -340,9 +354,76 @@ class GenerateBatchTests(IsolatedGenerationTestCase):
                 self.assertEqual(values["Status"], "Untested")
             self.assertIn("J6:J1048576", [str(item.sqref) for item in sheet.data_validations.dataValidation])
             self.assertEqual(len(sheet.tables), 1)
-            self.assertTrue(sheet.tables["TestCases"].autoFilter.ref.startswith("A5:K"))
+            self.assertTrue(sheet.tables["TestCases"].autoFilter.ref.startswith("A5:L"))
             self.assertEqual(sheet.freeze_panes, "A6")
             workbook.close()
+
+
+    def test_batch_maps_out_of_order_results_and_skips_explicit_brd_oracle(self):
+        rows = [
+            {"ID": "first", "Test Case Name": "Explicit", "Steps": "1. Save",
+             "BRD Evidence": "The application displays 'Saved' after saving."},
+            {"ID": "second", "Test Case Name": "Ad hoc", "Steps": "1. Save",
+             "BRD Evidence": ""},
+        ]
+        response = {"results": [
+            {"line_id": "second", "has_explicit_brd_oracle": False,
+             "generated_expected_result": "The saved item appears in the list."},
+            {"line_id": "first", "has_explicit_brd_oracle": True,
+             "generated_expected_result": ""},
+        ]}
+        cache = testcase_gen._ResponseCache(Path("unused-cache.json"), enabled=False)
+        with patch.object(testcase_gen, "chat_json", return_value=response) as chat:
+            testcase_gen.generate_supplemental_expected_results(rows, cache)
+
+        self.assertEqual(rows[0].get("Generated Expected Result"), None)
+        self.assertEqual(rows[1]["Generated Expected Result"], "The saved item appears in the list.")
+        submitted = json.loads(chat.call_args.args[1])["rows"]
+        self.assertEqual([item["line_id"] for item in submitted], ["first", "second"])
+
+    def test_batch_rejects_unknown_duplicate_and_missing_line_ids(self):
+        item = {"line_id": "row-6"}
+        for results, message in (
+            ([{"line_id": "other", "has_explicit_brd_oracle": False,
+               "generated_expected_result": "A result."}], "Unknown"),
+            ([{"line_id": "row-6", "has_explicit_brd_oracle": False,
+               "generated_expected_result": "A result."}] * 2, "Duplicate"),
+            ([], "omitted"),
+        ):
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                testcase_gen._validate_generated_expected_result_batch({"results": results}, [item])
+
+    def test_helper_updates_only_empty_result_cells_and_preserves_original_workbook(self):
+        from openpyxl import load_workbook
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = testcase_gen.write_excel([
+                {"Module": "Orders", "Test Case Name": "Needs result", "Steps": "1. Save",
+                 "Expected Result": "Primary text stays."},
+                {"Module": "Orders", "Test Case Name": "Already filled", "Steps": "1. Open",
+                 "Expected Result": "Original expected.", "Generated Expected Result": "Existing supplemental."},
+            ], root / "cases.xlsx")
+            output = root / "completed.xlsx"
+            response = {"results": [{
+                "line_id": "Test Cases!6", "has_explicit_brd_oracle": False,
+                "generated_expected_result": "The order appears in the list.",
+            }]}
+            with patch.object(testcase_gen, "chat_json", return_value=response) as chat:
+                testcase_gen.fill_generated_expected_results_workbook(
+                    source, output_path=output,
+                    cache=testcase_gen._ResponseCache(root / "cache.json", enabled=False),
+                )
+
+            self.assertFalse(output == source)
+            self.assertFalse(load_workbook(source, data_only=True)["Test Cases"]["L6"].value)
+            book = load_workbook(output, data_only=True)
+            sheet = book["Test Cases"]
+            self.assertEqual(sheet["G6"].value, "Primary text stays.")
+            self.assertEqual(sheet["L6"].value, "The order appears in the list.")
+            self.assertEqual(sheet["L7"].value, "Existing supplemental.")
+            self.assertIn("Test Cases!6", chat.call_args.args[1])
+            book.close()
 
     def test_step_formatter_preserves_arbitrarily_many_long_steps(self):
         steps = [f"Open screen {index} and verify the displayed value: {index}." + " Detail" * 60
@@ -392,7 +473,8 @@ class GenerateBatchTests(IsolatedGenerationTestCase):
             root = Path(temp_dir)
             self.write_knowledge_note(root)
             vault = SimpleNamespace(vault_path=root)
-            with patch.object(testcase_gen, "build_contexts", return_value=[ctx]), \
+            with patch.object(testcase_gen, "generate_supplemental_expected_results", side_effect=lambda rows, *_a, **_k: rows), \
+                 patch.object(testcase_gen, "build_contexts", return_value=[ctx]), \
                  patch.object(testcase_gen, "chat_json", side_effect=[
                          [group("POST_subscribenewsletter")],
                      ]) as chat:

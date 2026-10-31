@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import shutil
+import threading
 import unicodedata
 import uuid
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from capture_app.crawling import replayer
 from capture_app.reporting.native_run_report import sanitize_text
 from capture_app.workflows.case_metadata import load_metadata_sheet, row_hash
 from capture_app.workflows.replay_url import normalize_replay_url
+from capture_app.workflows.runner_controls import CtrlLSkipHotkey, prevent_system_sleep
 
 MUTATION_OBSERVER_JS = r"""
 (() => {
@@ -322,6 +324,8 @@ def _redact_observation(observation: dict, secrets: tuple[str, ...]) -> dict:
 
 def _actual_result(observation: dict, error: str = "") -> str:
     lowered_error = str(error or "").casefold()
+    if "ctrl+l" in lowered_error:
+        return "The testcase was skipped with Ctrl+L before replay finished; its observations may be partial."
     if "browser startup failed" in lowered_error:
         return "The browser could not start, so this testcase could not be replayed."
     if "invalid url" in lowered_error:
@@ -592,6 +596,24 @@ class TestcaseRunner:
             kwargs["storage_state"] = str(self.auth_state)
         return browser.new_context(**kwargs)
 
+    def _check_skip_requested(self) -> None:
+        requested = getattr(self, "_skip_requested", None)
+        if requested is not None and requested.is_set():
+            requested.clear()
+            raise RuntimeError("Operator requested Ctrl+L to skip this testcase.")
+
+    def _capture_case_controlled(self, payload: dict, actions: list[Action], attempt_id: str):
+        active_case = getattr(self, "_active_case", None)
+        if active_case is not None:
+            active_case.set()
+        try:
+            result = self._capture_case(payload, actions, attempt_id)
+            self._check_skip_requested()
+            return result
+        finally:
+            if active_case is not None:
+                active_case.clear()
+
     def _capture_case(self, payload: dict, actions: list[Action], attempt_id: str) -> tuple[dict, str]:
         if self.browser_factory:
             browser, close_browser, context = self.browser_factory(self.auth_state)
@@ -640,21 +662,29 @@ class TestcaseRunner:
         visited = False
         error = ""
         try:
+            self._check_skip_requested()
             replayer.goto_once(page, str(getattr(self, "_prepared_start_url", "") or payload["start_url"]))
+            self._check_skip_requested()
             visited = True
             replayer.settle(page)
+            self._check_skip_requested()
             replayer.wait_for_network_quiet(page)
+            self._check_skip_requested()
             baseline_messages = _observation_snapshot(page).get("messages", [])
             action_started_at = 0
             for index, action in enumerate(actions):
+                self._check_skip_requested()
                 self._active_request_capture = index == len(actions) - 1
                 if self._active_request_capture:
                     self._action_origin = _origin(str(getattr(page, "url", "")))
                     action_started_at = int(datetime.now(timezone.utc).timestamp() * 1000)
                     self._action_started_at = action_started_at
                 replayer.perform_action(page, action)
+                self._check_skip_requested()
                 replayer.settle(page)
+                self._check_skip_requested()
                 replayer.wait_for_network_quiet(page)
+                self._check_skip_requested()
             self._active_request_capture = False
             observation = _observation_snapshot(page)
             baseline = {_norm(item) for item in baseline_messages}
@@ -924,6 +954,25 @@ class TestcaseRunner:
         return ordered
 
     def run(self) -> dict:
+        self._skip_requested = threading.Event()
+        self._active_case = threading.Event()
+        hotkey = CtrlLSkipHotkey(self._active_case, self._skip_requested)
+        with prevent_system_sleep() as keep_awake:
+            self._keep_awake_active = keep_awake
+            self._ctrl_l_available = hotkey.start()
+            active_controls = []
+            if keep_awake:
+                active_controls.append("Windows sleep prevention active")
+            if self._ctrl_l_available:
+                active_controls.append("Ctrl+L skips the current testcase")
+            if active_controls:
+                print("[testcase_runner] " + "; ".join(active_controls))
+            try:
+                return self._run()
+            finally:
+                hotkey.stop()
+
+    def _run(self) -> dict:
         previous_run_id, latest = self._read_report()
         reuse_run = bool(self.resume or self.rerun_failed or self.rerun_outcome_code)
         if reuse_run and not previous_run_id:
@@ -1044,7 +1093,7 @@ class TestcaseRunner:
                     try:
                         if self.browser_factory:
                             cases_replayed += 1
-                            observation, error = self._capture_case(payload, actions, attempt_id)
+                            observation, error = self._capture_case_controlled(payload, actions, attempt_id)
                         else:
                             if browser_start_error:
                                 raise RuntimeError(browser_start_error)
@@ -1064,7 +1113,7 @@ class TestcaseRunner:
                                 context = self._new_context(browser)
                                 return browser, context.close, context
                             self.browser_factory = fresh_context
-                            observation, error = self._capture_case(payload, actions, attempt_id)
+                            observation, error = self._capture_case_controlled(payload, actions, attempt_id)
                             self.browser_factory = None
                         if error and not browser_start_error and _retryable_infrastructure_error(error):
                             retry_id = str(uuid.uuid4())
@@ -1073,13 +1122,13 @@ class TestcaseRunner:
                                 attempt_id = retry_id
                                 try:
                                     if self.browser_factory:
-                                        observation, error = self._capture_case(payload, retry_actions, retry_id)
+                                        observation, error = self._capture_case_controlled(payload, retry_actions, retry_id)
                                     else:
                                         def retry_context(_auth_state):
                                             context = self._new_context(browser)
                                             return browser, context.close, context
                                         self.browser_factory = retry_context
-                                        observation, error = self._capture_case(payload, retry_actions, retry_id)
+                                        observation, error = self._capture_case_controlled(payload, retry_actions, retry_id)
                                         self.browser_factory = None
                                 except Exception as retry_exc:
                                     error = f"{type(retry_exc).__name__}: browser retry failed"
@@ -1090,12 +1139,19 @@ class TestcaseRunner:
                         detail = _redact(exc, tuple(self.fixtures.values()))
                         error = f"{type(exc).__name__}: {detail or 'browser execution failed'}"
                     visible_actual = _actual_result(observation, error)
-                    claims = payload.get("claims") or _fallback_claims(str(row_values.get("Expected Result") or ""))
+                    primary_expected = str(row_values.get("Expected Result") or "").strip()
+                    generated_expected = str(row_values.get("Generated Expected Result") or "").strip()
+                    expected_text = primary_expected or generated_expected
+                    claims = (
+                        _fallback_claims(expected_text)
+                        if not primary_expected
+                        else payload.get("claims") or _fallback_claims(expected_text)
+                    )
                     if error:
                         status, claim_results, note = "Unknown", [], f"REPLAY-ERROR: {error}"
                     else:
                         status, claim_results, note = self._evaluate_case(
-                            str(row_values.get("Expected Result") or ""), claims, observation, attempt_id,
+                            expected_text, claims, observation, attempt_id,
                         )
                         if edited:
                             note = "EDITED: replay used stored metadata payload. " + note
@@ -1143,6 +1199,7 @@ class TestcaseRunner:
                         "action_request_class": action_request_class,
                         "action_request_succeeded": any(200 <= int(item.get("status") or 0) < 300 for item in own_responses),
                         "actual_result": visible_actual, "observation": observation,
+                        "error": _redact(error, tuple(self.fixtures.values())) if error else "",
                         "claim_results": safe_claim_results, "cleanup": cleanup_records,
                         "edited_metadata_used": edited,
                     }
@@ -1162,7 +1219,9 @@ class TestcaseRunner:
                    "report_path": str(self.report_path), "outcomes": outcomes,
                    "semantic_suggestions": semantic_suggestions,
                    "cases_replayed": cases_replayed,
-                   "browser_start_error": browser_start_error if not self.browser_factory else None}
+                   "browser_start_error": browser_start_error if not self.browser_factory else None,
+                   "keep_awake": bool(getattr(self, "_keep_awake_active", False)),
+                   "ctrl_l_skip_available": bool(getattr(self, "_ctrl_l_available", False))}
         print("[testcase_runner] " + json.dumps(summary, ensure_ascii=False))
         return summary
 

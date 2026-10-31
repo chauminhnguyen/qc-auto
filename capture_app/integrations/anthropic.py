@@ -28,14 +28,14 @@ def messages_json(
     system_prompt: str,
     user_prompt: str,
     model: str | None = None,
-    temperature: float = 0.4,
+    temperature: float | None = 0.4,
     max_tokens: int | None = None,
     max_retries: int = 0,
     output_schema: dict | None = None,
 ):
     """Call Claude and parse its text response as JSON.
 
-    Temperature and JSON schema are forwarded for reproducible structured judgments.
+    Temperature is forwarded when supplied; omit it for Claude models that do not accept it.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -51,7 +51,8 @@ def messages_json(
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
     }
-    payload["temperature"] = float(temperature)
+    if temperature is not None:
+        payload["temperature"] = float(temperature)
     if output_schema is not None:
         payload["output_config"] = {
             "format": {"type": "json_schema", "schema": output_schema},

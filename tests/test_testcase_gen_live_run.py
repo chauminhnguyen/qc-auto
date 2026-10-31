@@ -157,11 +157,12 @@ class LiveRunTestcaseGenerationTests(unittest.TestCase):
         workbook = load_workbook(output, data_only=False)
         sheet = workbook["Test Cases"]
 
-        self.assertEqual(sheet.max_column, 12)
+        self.assertEqual(sheet.max_column, 13)
         self.assertEqual(sheet.max_row, 7)
         self.assertEqual(sheet.cell(5, 1).value, "Module")
         self.assertEqual(sheet.cell(5, 11).value, "Evidence/Note")
         self.assertEqual(sheet.cell(5, 12).value, "Technical Evidence")
+        self.assertEqual(sheet.cell(5, 13).value, "Generated Expected Result")
         self.assertEqual(sheet.cell(6, 10).value, "Untested")
         self.assertEqual(sheet.cell(7, 10).value, "Untested")
         metadata = load_metadata_sheet(workbook)

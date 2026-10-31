@@ -18,6 +18,16 @@ class FakeHTTPResponse:
 
 
 class AnthropicStructuredOutputTests(unittest.TestCase):
+    def test_temperature_can_be_omitted_for_models_that_reject_it(self):
+        response = FakeHTTPResponse({
+            "content": [{"type": "text", "text": '{"ok":true}'}],
+            "stop_reason": "end_turn", "usage": {"output_tokens": 5},
+        })
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}), \
+             patch.object(anthropic.httpx, "post", return_value=response) as post:
+            anthropic.messages_json("system", "user", temperature=None, max_tokens=100)
+        self.assertNotIn("temperature", post.call_args.kwargs["json"])
+
     def test_end_turn_sends_schema_unchanged_and_returns_metadata(self):
         schema = {"type": "object", "required": ["ok"], "additionalProperties": False,
                   "properties": {"ok": {"type": "boolean"}}}

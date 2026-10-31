@@ -1,6 +1,7 @@
 ﻿import hashlib
 import json
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -16,6 +17,7 @@ from capture_app.workflows.testcase_runner import (
     TestcaseRunner, _actual_result, _evaluate_structured, _normalize_number_or_date,
     _norm, _redact_observation, _retryable_infrastructure_error,
 )
+from capture_app.workflows.runner_controls import CtrlLSkipHotkey
 
 
 class FakeRequest:
@@ -205,6 +207,16 @@ class CaseMetadataTests(unittest.TestCase):
 
 
 class ClaimComparisonTests(unittest.TestCase):
+    def test_ctrl_l_requests_skip_only_while_a_case_is_active(self):
+        active = threading.Event()
+        skip = threading.Event()
+        hotkey = CtrlLSkipHotkey(active, skip)
+        hotkey._handle_hotkey()
+        self.assertFalse(skip.is_set())
+        active.set()
+        hotkey._handle_hotkey()
+        self.assertTrue(skip.is_set())
+
     def test_navigation_uses_bounded_dom_content_wait(self):
         from capture_app.crawling.replayer import goto_once
 
@@ -237,6 +249,14 @@ class ClaimComparisonTests(unittest.TestCase):
         self.assertIn("could not open the saved website address", rendered)
         self.assertIn("blank page", rendered)
         self.assertNotIn("Messages seen:", rendered)
+
+    def test_ctrl_l_skip_is_reported_in_plain_language(self):
+        rendered = _actual_result(
+            {"url": "https://shop.example.test/", "title": "Store", "own_request": {"responses": []}},
+            "RuntimeError: Operator requested Ctrl+L to skip this testcase.",
+        )
+        self.assertIn("skipped with Ctrl+L", rendered)
+        self.assertIn("observations may be partial", rendered)
 
     def test_redaction_hides_fixture_and_email_without_changing_other_casing(self):
         observation = {"url": "https://shop.example.test", "title": "Store", "messages": ["Order Alice@example.test Saved"],
@@ -420,6 +440,24 @@ class RunnerWorkbookTests(unittest.TestCase):
                          "The action received HTTP 200 from POST https://shop.example.test/api/action.")
         self.assertEqual(result_sheet["J6"].value, "Passed")
         result_book.close()
+
+    def test_runner_uses_generated_expected_result_when_primary_is_blank(self):
+        source = self.root / "generated-expected.xlsx"
+        row = make_row("generated-case", expected="")
+        row["Generated Expected Result"] = "Order saved"
+        write_cases(source, [row])
+        runner = TestcaseRunner(
+            source,
+            browser_factory=lambda _auth: self._fake_browser(self.successful_click),
+            semantic="off",
+        )
+
+        result = runner.run()
+        workbook = load_workbook(result["output_path"], data_only=True)
+        sheet = workbook["Test Cases"]
+        self.assertEqual(sheet["J6"].value, "Passed")
+        self.assertEqual(sheet["L6"].value, "Order saved")
+        workbook.close()
 
     def test_rerun_failed_reuses_run_id_and_does_not_replay_passed_rows(self):
         source = self.root / "rerun.xlsx"
@@ -676,6 +714,23 @@ class RunnerWorkbookTests(unittest.TestCase):
         self.assertEqual(output["Test Cases"]["J6"].value, "Untested")
         self.assertIn("NO-FIXTURE:", output["Test Cases"]["K6"].value)
         self.assertIn(output["Test Cases"]["I6"].value, (None, ""))
+        output.close()
+
+    def test_ctrl_l_during_replay_records_unknown_and_continues_cleanly(self):
+        source = self.root / "ctrl-l-skip.xlsx"
+        write_cases(source, [make_row("skip-me")])
+        runner = TestcaseRunner(source, semantic="off")
+
+        def click_then_request_skip(page):
+            self.successful_click(page)
+            runner._skip_requested.set()
+
+        runner.browser_factory = lambda _auth: self._fake_browser(click_then_request_skip)
+        result = runner.run()
+        output = load_workbook(result["output_path"])
+        self.assertEqual(output["Test Cases"]["J6"].value, "Unknown")
+        self.assertTrue(output["Test Cases"]["K6"].value.startswith("REPLAY-ERROR:"))
+        self.assertIn("skipped with Ctrl+L", output["Test Cases"]["I6"].value)
         output.close()
 
     def test_browser_start_failure_is_reported_once_without_browser_none_cascade(self):

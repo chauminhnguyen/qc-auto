@@ -64,6 +64,10 @@ class CtrlLSkipHotkey:
             self._user32.PostThreadMessageW(self._thread_id, self._WM_QUIT, 0, 0)
         self._thread.join(timeout=2)
 
+    def _handle_hotkey(self) -> None:
+        if self.active_case.is_set():
+            self.skip_requested.set()
+
     def _message_loop(self) -> None:
         from ctypes import wintypes
 
@@ -94,7 +98,6 @@ class CtrlLSkipHotkey:
         try:
             while self._user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
                 if message.message == self._WM_HOTKEY and int(message.wParam) == self._HOTKEY_ID:
-                    if self.active_case.is_set():
-                        self.skip_requested.set()
+                    self._handle_hotkey()
         finally:
             self._user32.UnregisterHotKey(None, self._HOTKEY_ID)
