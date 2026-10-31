@@ -16,6 +16,14 @@ ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
 
 
+class JSONResponse(dict):
+    """Parsed JSON object with non-serialized Anthropic response metadata."""
+
+    def __init__(self, value: dict, response_metadata: dict):
+        super().__init__(value)
+        self.response_metadata = response_metadata
+
+
 def messages_json(
     system_prompt: str,
     user_prompt: str,
@@ -23,13 +31,12 @@ def messages_json(
     temperature: float = 0.4,
     max_tokens: int | None = None,
     max_retries: int = 0,
+    output_schema: dict | None = None,
 ):
     """Call Claude and parse its text response as JSON.
 
-    ``temperature`` is accepted for provider interface compatibility. The
-    request omits it so models that don't support temperature overrides work.
+    Temperature and JSON schema are forwarded for reproducible structured judgments.
     """
-    del temperature
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise OpenRouterError(
@@ -44,6 +51,11 @@ def messages_json(
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
     }
+    payload["temperature"] = float(temperature)
+    if output_schema is not None:
+        payload["output_config"] = {
+            "format": {"type": "json_schema", "schema": output_schema},
+        }
     headers = {
         "x-api-key": api_key,
         "anthropic-version": ANTHROPIC_VERSION,
@@ -73,36 +85,88 @@ def messages_json(
             raise OpenRouterError(
                 f"Anthropic returned {response.status_code}: {message}",
                 failure_kind="rate_limited" if response.status_code == 429 else None,
+                raw_response=response.text,
             )
 
-        try:
-            blocks = data["content"]
-            stop_reason = data.get("stop_reason")
-            text = "\n".join(
-                block["text"] for block in blocks
-                if isinstance(block, dict) and block.get("type") == "text"
-                and isinstance(block.get("text"), str)
-            ).strip()
-        except (KeyError, TypeError, AttributeError):
+        if not isinstance(data, dict):
             raise OpenRouterError(
-                "Anthropic returned an incomplete Messages API response.",
+                "Anthropic returned an invalid Messages API response: "
+                "stop_reason=unknown, output_tokens=unknown.",
                 failure_kind="invalid_response",
+                raw_response=response.text,
+                stop_reason="unknown",
+            )
+        stop_reason = data.get("stop_reason")
+        usage = data.get("usage") or {}
+        output_tokens = usage.get("output_tokens") if isinstance(usage, dict) else None
+        blocks = data.get("content")
+        text = "\n".join(
+            block["text"] for block in blocks
+            if isinstance(block, dict) and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ).strip() if isinstance(blocks, list) else ""
+        if stop_reason != "end_turn":
+            reason = str(stop_reason or "unknown")
+            token_count = output_tokens if output_tokens is not None else "unknown"
+            if reason == "refusal":
+                failure_kind = "refusal"
+            elif reason == "max_tokens":
+                failure_kind = "truncated"
+            else:
+                failure_kind = "invalid_response"
+            raise OpenRouterError(
+                f"Anthropic response was not complete: stop_reason={reason}, "
+                f"output_tokens={token_count}.",
+                raw_output=text or None,
+                failure_kind=failure_kind,
+                raw_response=response.text,
+                stop_reason=reason,
+                output_tokens=output_tokens,
+            )
+        if not isinstance(blocks, list):
+            raise OpenRouterError(
+                f"Anthropic returned an incomplete Messages API response: "
+                f"stop_reason=end_turn, output_tokens={output_tokens if output_tokens is not None else 'unknown'}.",
+                failure_kind="invalid_response",
+                raw_response=response.text,
+                stop_reason="end_turn",
+                output_tokens=output_tokens,
             )
         if not text:
             raise OpenRouterError(
-                "Anthropic returned no usable text content.",
-                failure_kind="truncated" if stop_reason == "max_tokens" else "invalid_response",
+                f"Anthropic returned no usable text content: stop_reason=end_turn, "
+                f"output_tokens={output_tokens if output_tokens is not None else 'unknown'}.",
+                failure_kind="invalid_response",
+                raw_response=response.text,
+                stop_reason="end_turn",
+                output_tokens=output_tokens,
             )
 
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.I)
         try:
-            return json.loads(text)
+            parsed = json.loads(text)
         except json.JSONDecodeError as exc:
-            truncated = stop_reason == "max_tokens"
             raise OpenRouterError(
-                f"Model returned invalid JSON{' before truncation' if truncated else ''}: {exc}\n"
-                f"Raw output: {text[:500]}",
+                f"Anthropic returned invalid JSON: {exc}; stop_reason=end_turn, "
+                f"output_tokens={output_tokens if output_tokens is not None else 'unknown'}.",
                 raw_output=text,
-                failure_kind="truncated" if truncated else "invalid_json",
+                failure_kind="invalid_json",
+                raw_response=response.text,
+                stop_reason="end_turn",
+                output_tokens=output_tokens,
             ) from exc
+        if not isinstance(parsed, dict):
+            raise OpenRouterError(
+                f"Anthropic JSON output was not an object: stop_reason=end_turn, "
+                f"output_tokens={output_tokens if output_tokens is not None else 'unknown'}.",
+                raw_output=text,
+                failure_kind="invalid_response",
+                raw_response=response.text,
+                stop_reason="end_turn",
+                output_tokens=output_tokens,
+            )
+        return JSONResponse(parsed, {
+            "stop_reason": stop_reason,
+            "output_tokens": output_tokens,
+        })

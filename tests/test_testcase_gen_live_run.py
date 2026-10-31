@@ -10,6 +10,7 @@ from unittest.mock import patch
 from openpyxl import load_workbook
 
 from capture_app.workflows import testcase_gen
+from capture_app.workflows.case_metadata import load_metadata_sheet
 
 
 def make_vault(root: Path, *, sessions=("s1",), transition_rows=150, include_transitions=True):
@@ -78,6 +79,24 @@ class LiveRunTestcaseGenerationTests(unittest.TestCase):
         self.assertIn("Live run run-latest transition 150:", rows[-1]["Test Case Name"])
         self.assertEqual(sum(bool(row.get("Technical Evidence")) for row in rows[1:]), 150)
 
+    def test_runner_safe_url_adds_https_to_captured_host_without_scheme(self):
+        self.assertEqual(
+            testcase_gen._runner_safe_url("demowebshop.tricentis.com/"),
+            "https://demowebshop.tricentis.com/",
+        )
+
+    def test_generated_transition_payload_records_source_entry_url(self):
+        vault = make_vault(self.root, transition_rows=1)
+        vault.conn.execute(
+            "UPDATE ui_transitions SET from_url=? WHERE crawl_id=? AND seq=1",
+            ("https://example.test/blue-jeans", "run-latest"),
+        )
+        vault.conn.commit()
+        rows = testcase_gen.generate_from_live_run(vault, "s1")
+        transition = rows[1]
+        self.assertEqual(transition["_runner_payload"]["entry_url"], "https://example.test/blue-jeans")
+        self.assertIn("Open https://example.test/blue-jeans", transition["Precondition"])
+
     def test_structured_loader_isolates_session_and_honors_requested_run(self):
         vault = make_vault(self.root, sessions=("s1", "s2"), transition_rows=2)
         vault.conn.execute("UPDATE ui_transitions SET crawl_id='run-other' WHERE session_id='s2'")
@@ -145,6 +164,11 @@ class LiveRunTestcaseGenerationTests(unittest.TestCase):
         self.assertEqual(sheet.cell(5, 12).value, "Technical Evidence")
         self.assertEqual(sheet.cell(6, 10).value, "Untested")
         self.assertEqual(sheet.cell(7, 10).value, "Untested")
+        metadata = load_metadata_sheet(workbook)
+        happy = metadata["s1:happy-path"]["payload"]["route_actions"]
+        branch = metadata["s1:run-latest:1"]["payload"]["route_actions"]
+        self.assertTrue(any(action.get("name") == "Save" for action in happy))
+        self.assertTrue(any(action.get("name") == "Action 1" for action in branch))
         workbook.close()
 
 

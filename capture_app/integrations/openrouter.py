@@ -47,10 +47,14 @@ DEFAULT_RETRY_BACKOFF_SECONDS = float(os.environ.get("OPENROUTER_RETRY_BACKOFF",
 
 class OpenRouterError(RuntimeError):
     def __init__(self, message: str, raw_output: str | None = None,
-                 failure_kind: str | None = None):
+                 failure_kind: str | None = None, raw_response: str | None = None,
+                 stop_reason: str | None = None, output_tokens: int | None = None):
         super().__init__(message)
         self.raw_output = raw_output
         self.failure_kind = failure_kind
+        self.raw_response = raw_response
+        self.stop_reason = stop_reason
+        self.output_tokens = output_tokens
 
 
 def _extract_error_code(data) -> int | None:
@@ -79,7 +83,7 @@ def chat_json(system_prompt: str, user_prompt: str, model: str | None = None,
               temperature: float = 0.4, max_tokens: int | None = None,
               max_retries: int = DEFAULT_MAX_RETRIES,
               retry_backoff: float = DEFAULT_RETRY_BACKOFF_SECONDS,
-              call_callback=None):
+              call_callback=None, response_schema: dict | None = None):
     """
     Calls OpenRouter, instructs the model to answer with JSON only, and
     parses that JSON. Raises OpenRouterError with a readable message on any
@@ -116,6 +120,15 @@ def chat_json(system_prompt: str, user_prompt: str, model: str | None = None,
             {"role": "user", "content": user_prompt},
         ],
     }
+    if response_schema is not None:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "structured_response",
+                "strict": True,
+                "schema": response_schema,
+            },
+        }
     # Reasoning tokens can consume the entire completion budget without
     # leaving any JSON for the caller. Empty setting disables this override.
     if REASONING_EFFORT:

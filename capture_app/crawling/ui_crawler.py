@@ -33,10 +33,13 @@ from capture_app.core.ax_tree import (
     is_submit_like, rank_actions, fingerprint,
 )
 from capture_app.core.url_policy import is_ignored
+from capture_app.crawling import replayer
 from capture_app.storage.vault import VaultWriter
 
-SETTLE_MS = 400
-LOAD_TIMEOUT_MS = 1500
+# Preserve the public constants while replay timing is owned by the shared
+# implementation used by both crawling and testcase execution.
+SETTLE_MS = replayer.SETTLE_MS
+LOAD_TIMEOUT_MS = replayer.LOAD_TIMEOUT_MS
 # How long to wait, after an action, for in-flight XHR/fetch calls to
 # actually finish before reading self._api_buffer. FIX: _settle() alone
 # (a fixed SETTLE_MS sleep + a domcontentloaded check that no-ops for
@@ -49,7 +52,7 @@ LOAD_TIMEOUT_MS = 1500
 # proxy for "any response has already reached _on_response" than a fixed
 # sleep. Bounded with a timeout so a page with a long-lived connection
 # (websocket, polling) never stalls the crawl.
-NETWORK_IDLE_TIMEOUT_MS = 3000
+NETWORK_IDLE_TIMEOUT_MS = replayer.NETWORK_IDLE_TIMEOUT_MS
 
 
 def _to_num(raw) -> float | None:
@@ -692,11 +695,7 @@ class HeadlessCrawler:
         return items
 
     def _settle(self, page):
-        page.wait_for_timeout(SETTLE_MS)
-        try:
-            page.wait_for_load_state("domcontentloaded", timeout=LOAD_TIMEOUT_MS)
-        except Exception:
-            pass
+        replayer.settle(page)
 
     def _wait_for_network_quiet(self, page):
         """FIX (root cause of ok=1/apis=[] on slower AJAX actions): _settle()
@@ -707,10 +706,7 @@ class HeadlessCrawler:
         land in _on_response first. Bounded by NETWORK_IDLE_TIMEOUT_MS so a
         page with a long-lived connection (websocket, polling) can't stall
         the crawl -- on timeout we just proceed with whatever's arrived."""
-        try:
-            page.wait_for_load_state("networkidle", timeout=NETWORK_IDLE_TIMEOUT_MS)
-        except Exception:
-            pass
+        replayer.wait_for_network_quiet(page)
 
     def _in_scope(self, url: str) -> bool:
         return urlparse(url or "").netloc == self._scope_host
@@ -740,19 +736,14 @@ class HeadlessCrawler:
         return samples[:3]
 
     def _replay(self, page, start_url: str, path: list[Action]):
-        try:
-            self._goto_resilient(page, start_url)
-            self._settle(page)
-        except Exception:
-            return False
-        for action in path:
-            try:
-                self._do(page, action)
-                self._settle(page)
-                self._wait_for_network_quiet(page)  # let this step's own replies land BEFORE the next action starts its clock
-            except Exception:
-                return False
-        return True
+        return replayer.replay_path(
+            page, start_url, path,
+            safety_gate=self.safety_gate,
+            settle_fn=self._settle,
+            quiet_fn=self._wait_for_network_quiet,
+            goto_fn=lambda target_page, url: self._goto_resilient(target_page, url),
+            action_fn=lambda target_page, action, safety_gate=None: self._do(target_page, action),
+        )
 
     def _goto_resilient(self, page, url: str):
         """FIX for a crawl-killing crash: page.goto() can be interrupted by
@@ -766,11 +757,7 @@ class HeadlessCrawler:
         _perform()'s own try/except (below), which now also wraps this
         call -- so worst case this becomes ONE failed transition, not a
         crashed crawl."""
-        try:
-            page.goto(url)
-        except Exception:
-            page.wait_for_timeout(500)
-            page.goto(url)
+        replayer.goto_resilient(page, url)
 
     def _perform(self, page, start_url: str, path: list[Action],
                  fp: str, action: Action) -> Transition:
@@ -805,44 +792,7 @@ class HeadlessCrawler:
         )
 
     def _do(self, page, action: Action):
-        if self.safety_gate:
-            self.safety_gate.set_trigger(page.url, action.label)
-        if action.kind == "goto":
-            page.goto(action.name, timeout=10000)
-            return
-        try:
-            self._do_strict(page, action, first_only=False)
-        except Exception as e:
-            # Was keyed on Playwright's "strict mode violation" text --
-            # that only ever fired because the OLD code used the bare,
-            # unnarrowed locator (ambiguous whenever >1 element shared a
-            # name). Now that dup_index narrows to a specific occurrence
-            # via .nth(), that specific failure mode is gone; broadened to
-            # catch any resolution failure (a stale snapshot, a dup_index
-            # that's since shifted) and fall back to the first match rather
-            # than only recognizing the one error string that used to be
-            # the sole cause.
-            self._vlog(f"nth({action.dup_index}) lookup for {action.name!r} failed "
-                       f"({e}) -- falling back to first match")
-            self._do_strict(page, action, first_only=True)
+        replayer.perform_action(page, action, safety_gate=self.safety_gate, vlog=self._vlog)
 
     def _do_strict(self, page, action: Action, first_only: bool):
-        locator = page.get_by_role(action.role, name=action.name)
-        locator = locator.first if first_only else locator.nth(action.dup_index)
-        if action.kind == "click":
-            locator.click(timeout=5000)
-        elif action.kind == "fill":
-            locator.fill(action.value or "test", timeout=5000)
-        elif action.kind == "toggle":
-            locator.click(timeout=5000)
-        elif action.kind == "check":
-            locator.check(timeout=5000)
-        elif action.kind == "select":
-            locator.select_option(label=action.value, timeout=5000)
-        elif action.kind == "set":
-            try:
-                locator.fill(action.value, timeout=5000)
-            except Exception:
-                locator.press("End", timeout=5000)
-        else:
-            raise ValueError(f"unsupported action kind: {action.kind}")
+        replayer.do_strict(page, action, first_only=first_only)

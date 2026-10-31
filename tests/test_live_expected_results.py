@@ -18,25 +18,46 @@ class FakeCache:
         self.discarded = 0
         self.prompts = []
         self.token_limits = []
+        self.response_schemas = []
+        self.commits = 0
         self.response_factory = response_factory or self.response
 
-    def cache_key(self, system_prompt, user_prompt, model, max_tokens):
-        return hashlib.sha256(f"{max_tokens}:{user_prompt}".encode()).hexdigest()
+    def cache_key(self, system_prompt, user_prompt, model, max_tokens, **kwargs):
+        schema = kwargs.get("response_schema")
+        return hashlib.sha256(f"{max_tokens}:{user_prompt}:{json.dumps(schema, sort_keys=True)}".encode()).hexdigest()
 
-    def chat_json(self, system_prompt, user_prompt, model, max_tokens):
+    def chat_json(self, system_prompt, user_prompt, model, max_tokens,
+                  response_schema=None, cache_result=True, **kwargs):
         self.prompts.append(user_prompt)
         self.token_limits.append(max_tokens)
-        key = self.cache_key(system_prompt, user_prompt, model, max_tokens)
-        if key in self.entries:
+        self.response_schemas.append(response_schema)
+        key = self.cache_key(system_prompt, user_prompt, model, max_tokens,
+                             response_schema=response_schema)
+        if key in self.entries and not kwargs.get("force_refresh", False):
             return self.entries[key]
         self.calls += 1
         response = self.response_factory(json.loads(user_prompt)["rows"])
-        self.entries[key] = response
+        for result in response.get("results", []):
+            if "claims" not in result:
+                claim_text = " ".join(str(line.get("text") or "") for line in result.get("expected_result_lines", []))
+                result["claims"] = [{"text": claim_text, "kind": "other", "literals": {
+                    "quoted_message_text": None, "expected_status_class": None,
+                    "url_pattern": None, "field_name": None, "field_value": None,
+                }}]
+        if cache_result:
+            self.commit(system_prompt, user_prompt, model, max_tokens, response,
+                        response_schema=response_schema)
         return response
 
-    def discard(self, system_prompt, user_prompt, model, max_tokens):
+    def commit(self, system_prompt, user_prompt, model, max_tokens, result, response_schema=None):
+        self.commits += 1
+        self.entries[self.cache_key(system_prompt, user_prompt, model, max_tokens,
+                                    response_schema=response_schema)] = result
+
+    def discard(self, system_prompt, user_prompt, model, max_tokens, response_schema=None):
         self.discarded += 1
-        self.entries.pop(self.cache_key(system_prompt, user_prompt, model, max_tokens), None)
+        self.entries.pop(self.cache_key(system_prompt, user_prompt, model, max_tokens,
+                                        response_schema=response_schema), None)
 
     @staticmethod
     def response(items):
@@ -96,11 +117,14 @@ class LiveExpectedResultTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.vault = SimpleNamespace(vault_path=Path(self.temp.name))
 
-    def generate(self, rows, cache=None, requirements=None, max_calls=7, max_tokens=None):
+    def generate(self, rows, cache=None, requirements=None, max_calls=7, max_tokens=None,
+                 refresh_cached=False):
         with patch.object(testcase_gen, "_load_brd_requirements", return_value=requirements or []):
             options = {"brd_db_path": None, "max_calls": max_calls}
             if max_tokens is not None:
                 options["max_tokens"] = max_tokens
+            if refresh_cached:
+                options["refresh_cached"] = True
             return testcase_gen.generate_live_run_expected_results(
                 self.vault, rows, cache or FakeCache(), **options,
             )
@@ -275,6 +299,25 @@ class LiveExpectedResultTests(unittest.TestCase):
         }]}
         self.assertIn(item["row_key"], testcase_gen._validate_live_result_batch(response, [item]))
 
+    def test_route_specific_page_replaces_generic_current_page_wording(self):
+        row = make_row(name="HOME link", facts={
+            "element_label": "HOME", "element_role": "link", "entity": "not observed",
+            "source_context": 'the "Tricentis Demo Web Shop" page', "messages": [],
+            "title_after": "not observed", "heading_after": [],
+        })
+        item = testcase_gen._live_result_prompt_item(row, [])
+        response = {"results": [{
+            "row_key": item["row_key"], "selected_brd_candidate_id": None,
+            "expected_result_lines": [{
+                "text": "No verifiable result was observed for the HOME link click on the current page.",
+                "source_refs": ["absence:no_verifiable_result"],
+            }],
+            "possible_defect": False, "evidence_note": "",
+        }]}
+        validated = testcase_gen._validate_live_result_batch(response, [item])
+        self.assertIn('on the "Tricentis Demo Web Shop" page',
+                      validated[item["row_key"]]["expected_result"])
+
     def test_generic_context_without_page_word_is_validated_and_normalized_later(self):
         row = make_row(facts={
             "element_label": "Save order", "element_role": "button", "entity": "order",
@@ -303,7 +346,84 @@ class LiveExpectedResultTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workbook was not written"):
             self.generate([row], cache)
         self.assertEqual(cache.discarded, 1)
+        self.assertEqual(cache.entries, {})
+        artifacts = list((Path(self.temp.name) / ".testcase_gen_failures").glob("*.json"))
+        self.assertEqual(len(artifacts), 1)
+        artifact = json.loads(artifacts[0].read_text(encoding="utf-8"))
+        self.assertIn('"results":[]', artifact["raw_model_output"])
         self.assertFalse(output.exists())
+
+    def test_schema_is_static_closed_and_batch_cache_commits_only_after_validation(self):
+        rows = [make_row(f"run:{i}", f"Action {i}") for i in range(45)]
+        cache = FakeCache()
+        self.generate(rows, cache, max_calls=3)
+        self.assertEqual(len(cache.response_schemas), 3)
+        self.assertTrue(all(schema == testcase_gen.EXPECTED_RESULT_OUTPUT_SCHEMA
+                            for schema in cache.response_schemas))
+        schema = testcase_gen.EXPECTED_RESULT_OUTPUT_SCHEMA
+        self.assertEqual(schema["required"], ["results"])
+        self.assertIs(schema["additionalProperties"], False)
+        row_schema = schema["properties"]["results"]["items"]
+        self.assertIs(row_schema["additionalProperties"], False)
+        self.assertEqual(row_schema["required"], [
+            "row_key", "selected_brd_candidate_id", "expected_result_lines", "claims",
+            "possible_defect", "evidence_note",
+        ])
+        self.assertEqual(row_schema["properties"]["selected_brd_candidate_id"]["type"],
+                         ["string", "null"])
+        self.assertIs(row_schema["properties"]["expected_result_lines"]["items"]["additionalProperties"], False)
+        self.assertEqual(cache.commits, 3)
+        self.assertEqual(len(cache.entries), 3)
+
+    def test_persistent_cache_keys_schema_and_reuses_only_committed_result(self):
+        cache_path = Path(self.temp.name) / "responses.json"
+        schema = testcase_gen.EXPECTED_RESULT_OUTPUT_SCHEMA
+        prompt = '{"rows":[]}'
+        with patch.object(testcase_gen, "LLM_PROVIDER", "openrouter"):
+            cache = testcase_gen._ResponseCache(cache_path)
+            old_key = cache.cache_key("system", prompt, None, 100)
+            schema_key = cache.cache_key("system", prompt, None, 100,
+                                         response_schema=schema)
+            self.assertNotEqual(old_key, schema_key)
+            self.assertNotIn(schema_key, cache.entries)
+            cache.commit("system", prompt, None, 100, {"results": []},
+                         response_schema=schema)
+            reloaded = testcase_gen._ResponseCache(cache_path)
+            with patch.object(testcase_gen, "chat_json", side_effect=AssertionError("cache miss")):
+                result = reloaded.chat_json("system", prompt, None, 100,
+                                            response_schema=schema)
+            self.assertEqual(result, {"results": []})
+
+    def test_refresh_bypasses_cache_and_preserves_old_valid_entry_on_bad_fresh_result(self):
+        row = make_row()
+        cache = FakeCache()
+        self.generate([row], cache)
+        self.assertEqual(cache.calls, 1)
+        cached = dict(next(iter(cache.entries.values())))
+
+        def refreshed(items):
+            item = items[0]
+            return {"results": [{
+                "row_key": item["row_key"], "selected_brd_candidate_id": None,
+                "expected_result_lines": [{
+                    "text": "No verifiable result was captured for Save order on the orders page.",
+                    "source_refs": ["absence:no_verifiable_result"],
+                }],
+                "possible_defect": False, "evidence_note": "",
+            }]}
+
+        cache.response_factory = refreshed
+        self.generate([row], cache, refresh_cached=True)
+        self.assertEqual(cache.calls, 2)
+        self.assertIn("orders page", row["Expected Result"])
+        self.assertEqual(cache.commits, 2)
+        cached = dict(next(iter(cache.entries.values())))
+
+        cache.response_factory = lambda _items: {"results": []}
+        with self.assertRaisesRegex(ValueError, "workbook was not written"):
+            self.generate([make_row()], cache, refresh_cached=True)
+        # A failed fresh call must not replace the last validated cached answer.
+        self.assertEqual(next(iter(cache.entries.values())), cached)
 
     def test_cli_does_not_write_workbook_when_expected_result_batch_is_incomplete(self):
         import sys
@@ -357,6 +477,17 @@ class LiveExpectedResultTests(unittest.TestCase):
         self.assertIn("third recorded", rows[1]["Expected Result"])
         self.assertIn("fourth recorded", rows[2]["Expected Result"])
 
+    def test_identical_expected_results_are_made_distinct(self):
+        same = "Header keyword search shall return products matching name or description."
+        rows = [
+            {"_transition_key": "r:26", "Expected Result": same, "_selected_brd_candidate_id": "C2",
+            "_observed_facts": {"action": {"label": "Search textbox"}, "page_context": "the starting page"}},
+            {"_transition_key": "r:40", "Expected Result": same, "_selected_brd_candidate_id": "C2",
+            "_observed_facts": {"action": {"label": "Search button"}, "page_context": "the starting page"}},
+        ]
+        testcase_gen._disambiguate_identical_expected_results(rows)
+        self.assertEqual(testcase_gen._lint_live_expected_results(rows), [])
+        self.assertNotEqual(rows[0]["Expected Result"], rows[1]["Expected Result"])
 
 if __name__ == "__main__":
     unittest.main()

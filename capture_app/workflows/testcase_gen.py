@@ -31,6 +31,8 @@ from capture_app.storage.vault import VaultWriter, slugify
 from capture_app.storage.vault import (
     _is_sensitive_field, _redact_structured_value, _redact_url,
 )
+from capture_app.workflows.case_metadata import row_hash as _runner_row_hash, write_metadata_sheet
+from capture_app.workflows.replay_url import normalize_replay_url
 
 CATEGORIES = [
     "happy-path", "missing-precondition", "invalid-input",
@@ -53,6 +55,73 @@ ENDPOINT_SPLIT_TARGET_SIZE = 5
 MAX_GENERATION_CALLS = 3
 MAX_EXPECTED_RESULT_CALLS = 7
 EXPECTED_RESULT_BATCH_SIZE = 22
+EXPECTED_RESULT_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "row_key": {"type": "string"},
+                    "selected_brd_candidate_id": {"type": ["string", "null"]},
+                    "expected_result_lines": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "source_refs": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["text", "source_refs"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "claims": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 4,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "kind": {"type": "string", "enum": [
+                                    "message", "url", "api_status", "field_state", "other",
+                                ]},
+                                "literals": {
+                                    "type": "object",
+                                    "properties": {
+                                        "quoted_message_text": {"type": ["string", "null"]},
+                                        "expected_status_class": {"type": ["string", "null"]},
+                                        "url_pattern": {"type": ["string", "null"]},
+                                        "field_name": {"type": ["string", "null"]},
+                                        "field_value": {"type": ["string", "null"]},
+                                    },
+                                    "required": [
+                                        "quoted_message_text", "expected_status_class",
+                                        "url_pattern", "field_name", "field_value",
+                                    ],
+                                    "additionalProperties": False,
+                                },
+                            },
+                            "required": ["text", "kind", "literals"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "possible_defect": {"type": "boolean"},
+                    "evidence_note": {"type": "string"},
+                },
+                "required": [
+                    "row_key", "selected_brd_candidate_id", "expected_result_lines", "claims",
+                    "possible_defect", "evidence_note",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["results"],
+    "additionalProperties": False,
+}
 MAX_BRD_ATTEMPTS_PER_REQUIREMENT = 3
 DEFAULT_BRD_MAX_TESTCASES_PER_REQUIREMENT = 3
 DEFAULT_BRD_MIN_TESTCASES_PER_REQUIREMENT = 2
@@ -147,7 +216,10 @@ class _ResponseCache:
             print(f"[testcase_gen] response cache at {self.path} could not be read; starting a new cache")
 
     def chat_json(self, system_prompt: str, user_prompt: str, model: str | None,
-                  max_tokens: int, force_refresh: bool = False):
+                  max_tokens: int, force_refresh: bool = False,
+                  response_schema: dict | None = None, cache_result: bool = True,
+                  preserve_cached_on_refresh: bool = False,
+                  temperature: float = 0.4):
         provider = LLM_PROVIDER
         if provider == "openrouter":
             effective_model = model or DEFAULT_MODEL
@@ -160,8 +232,10 @@ class _ResponseCache:
                 f"Unsupported LLM_PROVIDER {provider!r}; use 'openrouter' or 'anthropic'."
             )
         key = self.cache_key(system_prompt, user_prompt, effective_model, max_tokens,
-                             provider=provider, provider_settings=provider_settings)
-        if force_refresh and self.enabled and key in self.entries:
+                             provider=provider, provider_settings=provider_settings,
+                             response_schema=response_schema, temperature=temperature)
+        if (force_refresh and not preserve_cached_on_refresh
+                and self.enabled and key in self.entries):
             # Drop the old result before the retry so a failed retry cannot
             # cause the same stale blocked answer to be reused next run.
             self.entries.pop(key, None)
@@ -178,7 +252,7 @@ class _ResponseCache:
                       f"{self.path}: {exc}")
         if self.enabled and key in self.entries and not force_refresh:
             print("  [testcase_gen] reused cached LLM response")
-            return self.entries[key]
+            return self._unwrap_cache_entry(self.entries[key])
         if self.quota_exhausted:
             raise OpenRouterError(
                 "Skipping LLM call because an earlier request exhausted the provider quota.",
@@ -192,17 +266,55 @@ class _ResponseCache:
         self.calls_made += 1
         try:
             caller = chat_json if provider == "openrouter" else messages_json
-            result = caller(
-                system_prompt, user_prompt, model=model, max_tokens=max_tokens,
-                max_retries=0,
-            )
+            call_kwargs = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "max_retries": 0,
+                "temperature": temperature,
+            }
+            if response_schema is not None:
+                call_kwargs["response_schema" if provider == "openrouter" else "output_schema"] = response_schema
+            result = caller(system_prompt, user_prompt, **call_kwargs)
         except OpenRouterError as exc:
             if exc.failure_kind in {"quota_exhausted", "rate_limited"}:
                 self.quota_exhausted = True
             raise
+        if cache_result:
+            self.commit(
+                system_prompt, user_prompt, model, max_tokens, result,
+                response_schema=response_schema, temperature=temperature,
+            )
+        return result
+
+    @staticmethod
+    def _unwrap_cache_entry(entry):
+        if isinstance(entry, dict) and entry.get("__response_cache_envelope__") is True:
+            from capture_app.integrations.anthropic import JSONResponse
+            value = entry.get("value")
+            if isinstance(value, dict):
+                return JSONResponse(value, entry.get("response_metadata") or {})
+            return value
+        return entry
+
+    def commit(self, system_prompt: str, user_prompt: str, model: str | None,
+               max_tokens: int, result, response_schema: dict | None = None,
+               temperature: float = 0.4) -> None:
+        """Persist a response after the calling workflow has validated it."""
         if not self.enabled:
-            return result
-        self.entries[key] = result
+            return
+        key = self.cache_key(
+            system_prompt, user_prompt, model, max_tokens, response_schema=response_schema,
+            temperature=temperature,
+        )
+        response_metadata = getattr(result, "response_metadata", None)
+        if response_metadata is not None and isinstance(result, dict):
+            self.entries[key] = {
+                "__response_cache_envelope__": True,
+                "value": dict(result),
+                "response_metadata": response_metadata,
+            }
+        else:
+            self.entries[key] = result
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = self.path.with_name(self.path.name + ".tmp")
@@ -213,28 +325,32 @@ class _ResponseCache:
             os.replace(temp_path, self.path)
         except OSError as exc:
             print(f"[testcase_gen] could not save response cache at {self.path}: {exc}")
-        return result
 
     def cache_key(self, system_prompt: str, user_prompt: str, model: str | None,
                   max_tokens: int, provider: str | None = None,
-                  provider_settings: str | None = None) -> str:
+                  provider_settings: str | None = None,
+                  response_schema: dict | None = None,
+                  temperature: float = 0.4) -> str:
         provider = provider or LLM_PROVIDER
         if provider_settings is None:
             provider_settings = REASONING_EFFORT if provider == "openrouter" else ""
         effective_model = model or (DEFAULT_MODEL if provider == "openrouter" else ANTHROPIC_DEFAULT_MODEL)
         key_payload = json.dumps(
-            [self.VERSION, provider, effective_model, max_tokens, 0.4, provider_settings,
-             system_prompt, user_prompt],
+            [self.VERSION, provider, effective_model, max_tokens, float(temperature), provider_settings,
+             system_prompt, user_prompt] + ([response_schema] if response_schema is not None else []),
             ensure_ascii=False, separators=(",", ":"),
         )
         return hashlib.sha256(key_payload.encode("utf-8")).hexdigest()
 
     def discard(self, system_prompt: str, user_prompt: str, model: str | None,
-                max_tokens: int) -> None:
+                max_tokens: int, response_schema: dict | None = None) -> None:
         """Remove a cached model response that failed caller validation."""
         if not self.enabled:
             return
-        key = self.cache_key(system_prompt, user_prompt, model, max_tokens)
+        key = self.cache_key(
+            system_prompt, user_prompt, model, max_tokens,
+            response_schema=response_schema,
+        )
         if key not in self.entries:
             return
         self.entries.pop(key, None)
@@ -2758,6 +2874,11 @@ Quote captured visible messages exactly, including punctuation. Never turn a URL
 HTTP status, request method, endpoint, response body, or identifier into a tester-facing outcome. Those
 belong only in Technical Evidence and are not provided as expected-result evidence.
 
+Also return 1-4 atomic claims that cover the expected-result text. Each claim has its own text and kind
+(message, url, api_status, field_state, or other), plus extracted literals that are explicitly present:
+quoted_message_text, expected_status_class, field_name, field_value. Use null for absent literals. Claims
+must not add outcomes or literals beyond the expected result.
+
 If there is no selected BRD and no verifiable visible UI outcome, do not invent success or failure. Write
 that no verifiable result was observed for the specific action and page context, and cite
 absence:no_verifiable_result. Keep the action and page context in that statement so missing outcomes
@@ -2771,7 +2892,9 @@ part of the single expected-result statement and do not infer a different busine
 Do not put HTTP, API, POST, GET, endpoint, status-code, URL, or ID terminology in your own wording.
 An exact captured UI message may contain one of those words; preserve it only inside a verbatim quote.
 Return only JSON shaped as {"results":[{"row_key":"...","selected_brd_candidate_id":null,
-"expected_result_lines":[{"text":"...","source_refs":["..."]}],"possible_defect":false,
+"expected_result_lines":[{"text":"...","source_refs":["..."]}],"claims":[{"text":"...",
+"kind":"message|url|api_status|field_state|other","literals":{"quoted_message_text":null,
+"expected_status_class":null,"url_pattern":null,"field_name":null,"field_value":null}}],"possible_defect":false,
 "evidence_note":""}]} with exactly one result for each input row."""
 
 
@@ -2795,6 +2918,12 @@ def _safe_screen_fact(value: object) -> str:
     text = str(value or "").strip()
     text = re.sub(r"https?://\S+", "", text, flags=re.I)
     return text[:500]
+
+
+def _runner_safe_url(value: object) -> str:
+    """Keep replay URLs portable without persisting sensitive query values."""
+    safe = _redact_url(normalize_replay_url(value))
+    return safe.replace("[REDACTED]", "{{START_URL_SECRET}}")
 
 
 def _observed_facts_for_transition(branch: dict, step: dict | None,
@@ -3120,6 +3249,43 @@ def _live_result_prompt_item(row: dict, brd_candidates: list[dict]) -> dict:
         "has_verifiable_visible_outcome": has_visible_oracle,
     }
 
+def _resolve_brd_ref(ref: str, aliases: dict) -> str:
+    """Map a model-written brd: ref to brd:<candidate_id> when it is unambiguous."""
+    alias = ref.removeprefix("brd:")
+    tried = [alias, alias.rsplit("/", 1)[-1]]      # as written, then without the "<file>.md/" prefix
+    for a in tried:
+        if a in aliases:
+            return f"brd:{aliases[a]}"
+    tail = tried[-1].rsplit("::", 1)[-1]           # e.g. "BR-02.11"
+    hits = {cid for a, cid in aliases.items() if a.rsplit("::", 1)[-1] == tail}
+    return f"brd:{hits.pop()}" if len(hits) == 1 else ref
+
+
+def _split_expected_claims(expected_text: str) -> list[dict]:
+    """Deterministic fallback for legacy cached/model responses without claims."""
+    fragments = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", expected_text) if part.strip()]
+    fragments = fragments[:4] or [expected_text.strip()]
+    claims = []
+    for text in fragments:
+        quoted = re.search(r'["“](.+?)["”]', text)
+        status = re.search(r"\b([2-5]xx)\b", text, re.I)
+        url = re.search(r"https?://\S+|(?:^|\s)(/[A-Za-z0-9_./{}-]+)", text)
+        field = re.search(r"(?:field|field named|for)\s+[\"“]?([^\"”.,;]+)", text, re.I)
+        lowered = text.casefold()
+        kind = ("message" if quoted else "api_status" if status else "url" if url
+                else "field_state" if field else "other")
+        claims.append({
+            "text": text,
+            "kind": kind,
+            "literals": {
+                "quoted_message_text": quoted.group(1) if quoted else None,
+                "expected_status_class": status.group(1).lower() if status else None,
+                "url_pattern": (url.group(0).strip() if url else None),
+                "field_name": field.group(1).strip() if field else None,
+                "field_value": None,
+            },
+        })
+    return claims
 
 def _validate_live_result_batch(response: object, prompt_items: list[dict]) -> dict[str, dict]:
     if not isinstance(response, dict) or not isinstance(response.get("results"), list):
@@ -3184,12 +3350,17 @@ def _validate_live_result_batch(response: object, prompt_items: list[dict]) -> d
             normalized_refs = []
             for ref in refs:
                 if ref.startswith("brd:"):
+                    ref = _resolve_brd_ref(ref, candidate_aliases[key])
                     alias = ref.removeprefix("brd:")
                     ref = f"brd:{candidate_aliases[key][alias]}" if alias in candidate_aliases[key] else ref
                 normalized_refs.append(ref)
             refs = normalized_refs
             if any(ref not in allowed for ref in refs):
-                raise ValueError(f"LLM cited an unknown source reference for {key}.")
+                bad = [r for r in refs if r not in allowed]
+                if bad:
+                    raise ValueError(
+                        f"LLM cited unknown source reference(s) {bad} for {key}; allowed: {sorted(allowed)}.")
+                # raise ValueError(f"LLM cited an unknown source reference for {key}.")
             # The selected candidate is itself a structured citation in the
             # result. Carry it into line-level provenance when the model omits
             # the redundant reference there.
@@ -3197,6 +3368,37 @@ def _validate_live_result_batch(response: object, prompt_items: list[dict]) -> d
                 refs.append(f"brd:{selected_brd}")
             clean_lines.append(text)
         expected_text = "\n".join(clean_lines)
+        claims = result.get("claims")
+        if claims is None:
+            claims = _split_expected_claims(expected_text)
+        if not isinstance(claims, list) or not 1 <= len(claims) <= 4:
+            raise ValueError(f"LLM expected-result response must contain 1-4 atomic claims for {key}.")
+        clean_claims = []
+        allowed_claim_kinds = {"message", "url", "api_status", "field_state", "other"}
+        literal_names = {
+            "quoted_message_text", "expected_status_class", "url_pattern", "field_name", "field_value",
+        }
+        for claim in claims:
+            if not isinstance(claim, dict):
+                raise ValueError(f"LLM returned an invalid claim for {key}.")
+            claim_text = str(claim.get("text") or "").strip()
+            kind = str(claim.get("kind") or "")
+            literals = claim.get("literals")
+            if not claim_text or kind not in allowed_claim_kinds:
+                raise ValueError(f"LLM returned an incomplete claim for {key}.")
+            if not isinstance(literals, dict) or set(literals) != literal_names:
+                raise ValueError(f"LLM returned invalid claim literals for {key}.")
+            clean_literals = {
+                name: (str(value).strip() if value is not None else None)
+                for name, value in literals.items()
+            }
+            quoted = clean_literals["quoted_message_text"]
+            if quoted and quoted not in claim_text:
+                raise ValueError(f"Claim quoted text is not present in its claim for {key}.")
+            status_class = clean_literals["expected_status_class"]
+            if status_class and status_class.casefold() not in {"2xx", "3xx", "4xx", "5xx"}:
+                raise ValueError(f"Claim has an unsupported status class for {key}.")
+            clean_claims.append({"text": claim_text, "kind": kind, "literals": clean_literals})
         for message in visible_messages[key]:
             if message and f'"{message}"' not in expected_text and f'“{message}”' not in expected_text:
                 raise ValueError(f"LLM omitted or altered a captured visible message for {key}.")
@@ -3249,6 +3451,19 @@ def _validate_live_result_batch(response: object, prompt_items: list[dict]) -> d
                 }
                 if not generic_context:
                     context_tokens = _search_tokens(page_context)
+                    # A model may refer to a route-specific page as "the
+                    # current page". Replace that generic locator with the
+                    # exact recorded route label, so the result stays
+                    # verifiable without spending another model call.
+                    context_label = page_context.strip()
+                    current_location = re.compile(
+                        r"\b(?:(?:the|this)\s+)?current\s+(?:page|screen|form)\b"
+                        r"|\bthis\s+(?:page|screen|form)\b", re.I,
+                    )
+                    if current_location.search(expected_text):
+                        expected_text = current_location.sub(context_label, expected_text)
+                        lowered = expected_text.casefold()
+                        expected_tokens = _search_tokens(expected_text)
                     if (page_context.casefold() not in lowered
                             and context_tokens and not (context_tokens & expected_tokens)):
                         raise ValueError(f"LLM missing-outcome result does not identify the page context for {key}.")
@@ -3262,6 +3477,7 @@ def _validate_live_result_batch(response: object, prompt_items: list[dict]) -> d
             raise ValueError(f"LLM defect flag lacks a linked BRD and Possible defect note for {key}.")
         by_key[key] = {
             "expected_result": expected_text,
+            "claims": clean_claims,
             "selected_brd_candidate_id": str(selected_brd) if selected_brd is not None else None,
             "possible_defect": possible_defect,
             "evidence_note": evidence_note,
@@ -3274,11 +3490,54 @@ def _validate_live_result_batch(response: object, prompt_items: list[dict]) -> d
     return by_key
 
 
+def _write_expected_result_failure_artifact(
+    vault_path: str | Path, batch_index: int, row_keys: list[str],
+    error: Exception, response: object = None,
+) -> Path:
+    """Persist complete model output and metadata without echoing it to console."""
+    response_metadata = getattr(response, "response_metadata", {}) or {}
+    raw_provider_response = getattr(error, "raw_response", None)
+    raw_model_output = getattr(error, "raw_output", None)
+    if raw_model_output is None and response is not None:
+        try:
+            raw_model_output = json.dumps(
+                dict(response) if isinstance(response, dict) else response,
+                ensure_ascii=False, separators=(",", ":"),
+            )
+        except (TypeError, ValueError):
+            raw_model_output = repr(response)
+    if raw_model_output is None:
+        raw_model_output = ""
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    stamp = f"{timestamp}-{time.time_ns() % 1_000_000_000:09d}"
+    directory = Path(vault_path) / ".testcase_gen_failures"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"expected-results-{stamp}-batch-{batch_index}.json"
+    artifact = {
+        "created_at_utc": timestamp,
+        "batch_index": batch_index,
+        "row_keys": row_keys,
+        "error": str(error).split("\nRaw output:", 1)[0],
+        "failure_kind": getattr(error, "failure_kind", None),
+        "stop_reason": getattr(error, "stop_reason", None) or response_metadata.get("stop_reason"),
+        "output_tokens": (getattr(error, "output_tokens", None)
+                          if getattr(error, "output_tokens", None) is not None
+                          else response_metadata.get("output_tokens")),
+        "raw_provider_response": raw_provider_response,
+        "raw_model_output": raw_model_output,
+    }
+    temp_path = path.with_name(path.name + ".tmp")
+    temp_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp_path, path)
+    return path
+
+
 def generate_live_run_expected_results(
     vault: VaultWriter, rows: list[dict], cache: _ResponseCache,
     brd_db_path: str | Path | None = "./brd_inventory.sqlite",
     max_calls: int = MAX_EXPECTED_RESULT_CALLS,
     max_tokens: int = MAX_TOKENS,
+    refresh_cached: bool = False,
 ) -> list[dict]:
     """LLM-phrase every live-run/happy-path result from observed facts and BRD candidates."""
     if max_calls < 1:
@@ -3295,12 +3554,13 @@ def generate_live_run_expected_results(
         return rows
     batches = [prompt_items[i:i + EXPECTED_RESULT_BATCH_SIZE]
                for i in range(0, len(prompt_items), EXPECTED_RESULT_BATCH_SIZE)]
-    uncached_batches = sum(
+    uncached_batches = len(batches) if refresh_cached else sum(
         1 for batch in batches
         if not cache.enabled or cache.cache_key(
             OBSERVED_RESULT_SYSTEM_PROMPT,
             json.dumps({"rows": batch}, ensure_ascii=False, separators=(",", ":")),
             model=None, max_tokens=max_tokens,
+            response_schema=EXPECTED_RESULT_OUTPUT_SCHEMA,
         ) not in cache.entries
     )
     if uncached_batches > max_calls:
@@ -3310,19 +3570,42 @@ def generate_live_run_expected_results(
             "Raise --expected-result-max-calls to cover this run."
         )
     row_by_key = {str(row.get("_transition_key") or "happy-path"): row for row in rows}
+    validated_batch_outputs = []
     for batch_index, batch in enumerate(batches, start=1):
         user_prompt = json.dumps({"rows": batch}, ensure_ascii=False, separators=(",", ":"))
+        response = None
         try:
             response = cache.chat_json(
                 OBSERVED_RESULT_SYSTEM_PROMPT, user_prompt, model=None, max_tokens=max_tokens,
+                response_schema=EXPECTED_RESULT_OUTPUT_SCHEMA, cache_result=False,
+                force_refresh=refresh_cached,
+                preserve_cached_on_refresh=refresh_cached,
             )
-            validated = _validate_live_result_batch(response, batch)
+            validated = _validate_live_result_batch_salvaging(response, batch)
         except Exception as exc:
-            cache.discard(OBSERVED_RESULT_SYSTEM_PROMPT, user_prompt, model=None, max_tokens=max_tokens)
+            if not refresh_cached:
+                cache.discard(
+                    OBSERVED_RESULT_SYSTEM_PROMPT, user_prompt, model=None, max_tokens=max_tokens,
+                    response_schema=EXPECTED_RESULT_OUTPUT_SCHEMA,
+                )
+            try:
+                artifact_path = _write_expected_result_failure_artifact(
+                    vault.vault_path, batch_index, [str(item["row_key"]) for item in batch],
+                    exc, response=response,
+                )
+                artifact_note = f" Full response saved to {artifact_path}."
+            except OSError as artifact_error:
+                artifact_note = f" Could not write the full-response artifact: {artifact_error}."
             raise ValueError(
                 f"Expected-result LLM batch {batch_index}/{len(batches)} failed validation; "
-                f"workbook was not written: {exc}"
+                f"workbook was not written: {str(exc).split(chr(10) + 'Raw output:', 1)[0]}"
+                f".{artifact_note}"
             ) from exc
+        cache.commit(
+            OBSERVED_RESULT_SYSTEM_PROMPT, user_prompt, model=None, max_tokens=max_tokens,
+            result=response, response_schema=EXPECTED_RESULT_OUTPUT_SCHEMA,
+        )
+        validated_batch_outputs.append(dict(response) if isinstance(response, dict) else response)
         for key, result in validated.items():
             row = row_by_key[key]
             prompt_item = next(item for item in batch if str(item["row_key"]) == key)
@@ -3338,6 +3621,7 @@ def generate_live_run_expected_results(
                     and not re.search(r"\b(?:page|screen|form|view)\b", expected_result, re.I)):
                 expected_result = expected_result.rstrip().rstrip(".!? ") + " on the current page."
             row["Expected Result"] = expected_result
+            row["_claims"] = result["claims"]
             row["Expected Result (Plain Language)"] = expected_result
             row["_selected_brd_candidate_id"] = result["selected_brd_candidate_id"]
             selected_candidate = next((candidate for item in batch if str(item["row_key"]) == key
@@ -3357,9 +3641,20 @@ def generate_live_run_expected_results(
             else:
                 row["Evidence/Note"] = result["evidence_note"] or brd_note
     _disambiguate_repeated_action_results(rows)
+    _disambiguate_identical_expected_results(rows)
     lint_errors = _lint_live_expected_results(rows)
     if lint_errors:
-        raise ValueError("Expected-result lint failed; workbook was not written: " + "; ".join(lint_errors))
+        lint_error = ValueError("Expected-result lint failed: " + "; ".join(lint_errors))
+        try:
+            artifact_path = _write_expected_result_failure_artifact(
+                vault.vault_path, 0, [str(row.get("_transition_key") or "happy-path") for row in rows],
+                lint_error, response={"validated_batches": validated_batch_outputs},
+            )
+            artifact_note = f" Full validated batch responses saved to {artifact_path}."
+        except OSError as artifact_error:
+            artifact_note = f" Could not write the full-response artifact: {artifact_error}."
+        raise ValueError(f"Expected-result lint failed; workbook was not written: "
+                         f"{'; '.join(lint_errors)}.{artifact_note}")
     return rows
 
 
@@ -3429,6 +3724,88 @@ def _legacy_transition_expected_result(branch: dict) -> str:
         return f"Reproduce the recorded outcome: {outcome}. Destination: {destination}."
     return f"Reproduce the recorded live-run outcome: {outcome}."
 
+def _disambiguate_identical_expected_results(rows: list[dict]) -> int:
+    """Make identical Expected Result texts unique by tying each one to its own recorded step."""
+    def norm(text: str) -> str:
+        return re.sub(r"\s+", " ", text).casefold()
+
+    def groups_of_duplicates():
+        groups: dict[str, list[dict]] = {}
+        for row in rows:
+            text = str(row.get("Expected Result") or "").strip()
+            if text:
+                groups.setdefault(norm(text), []).append(row)
+        return [g for g in groups.values() if len({str(r.get("_transition_key")) for r in g}) > 1]
+
+    changed = 0
+    # Pass 1: BRD-derived sentences repeated verbatim -> tie each to its own action and page.
+    for group in groups_of_duplicates():
+        for row in group:
+            facts = row.get("_observed_facts") or {}
+            action = facts.get("action") if isinstance(facts.get("action"), dict) else {}
+            label = str(action.get("label") or row.get("Test Case Name") or "").strip()
+            page = str(facts.get("page_context") or "").strip()
+            if row.get("_selected_brd_candidate_id") and label:
+                suffix = f", as tested by {label}"
+                if page and "not observed" not in page.casefold():
+                    suffix += f" on {page}"
+                row["Expected Result"] = str(row["Expected Result"]).strip().rstrip(".") + suffix + "."
+                changed += 1
+    # Pass 2: anything still identical (e.g. repeated absence statements) -> add the row's own step number.
+    for group in groups_of_duplicates():
+        for row in group:
+            key = str(row.get("_transition_key") or "")
+            step = key.rsplit(":", 1)[-1] if ":" in key else key
+            row["Expected Result"] = (
+                str(row["Expected Result"]).strip().rstrip(".") + f" (recorded transition {step})."
+            )
+            changed += 1
+    return changed
+
+def _validate_live_result_batch_salvaging(response, items, *args, **kwargs):
+    """Validate a batch. If only individual rows fail their own checks, replace just those rows with a
+    deterministic 'no verifiable result' row instead of aborting the whole run."""
+    try:
+        return _validate_live_result_batch(response, items, *args, **kwargs)
+    except ValueError as batch_error:
+        first_error = batch_error
+    results = response.get("results") if isinstance(response, dict) else None
+    keys = [str(item["row_key"]) for item in items]
+    if not isinstance(results, list) or len(results) != len(items):
+        raise first_error
+    by_key = {str(r.get("row_key")): r for r in results if isinstance(r, dict)}
+    if set(by_key) != set(keys):
+        raise first_error
+    validated: dict = {}
+    replaced: list[tuple[str, str]] = []
+    for item in items:
+        key = str(item["row_key"])
+        try:
+            validated.update(_validate_live_result_batch({"results": [by_key[key]]}, [item], *args, **kwargs))
+            continue
+        except ValueError as row_error:
+            reason = row_error
+        facts = item.get("observed_facts") or {}
+        action = facts.get("action") if isinstance(facts.get("action"), dict) else {}
+        label = str(action.get("label") or item.get("test_case_name") or "the recorded action")
+        page = str(facts.get("page_context") or "page context not observed")
+        fallback = {"results": [{
+            "row_key": item["row_key"], "selected_brd_candidate_id": None,
+            "expected_result_lines": [{
+                "text": f"No verifiable result was observed for {label} on {page}.",
+                "source_refs": ["absence:no_verifiable_result"]}],
+            "possible_defect": False, "evidence_note": "",
+        }]}
+        try:
+            validated.update(_validate_live_result_batch(fallback, [item], *args, **kwargs))
+        except ValueError:
+            raise reason from None
+        replaced.append((key, str(reason)))
+    if not replaced or len(replaced) > max(3, len(items) // 4):
+        raise first_error
+    for key, reason in replaced:
+        print(f"[testcase_gen] replaced invalid LLM result for {key}: {reason}", file=sys.stderr)
+    return validated
 
 def _lint_live_expected_results(rows: list[dict]) -> list[str]:
     banned = re.compile(r"\b(?:HTTP|API|POST|GET|endpoint|status code|URL|IDs?)\b|https?://", re.I)
@@ -3591,6 +3968,17 @@ def generate_from_live_run(
         "_observed_facts": happy_facts,
         "_transition_actions": happy_actions,
         "_transition_apis": [{"ref_stem": ref} for ref in sorted(happy_api_refs)],
+        "_runner_payload": {
+            "case_id": f"{session_id}:happy-path",
+            "source_session_id": str(session_id),
+            "source_run_id": str(selected_run),
+            "start_url": _runner_safe_url(session.get("start_url") or ""),
+            "route_actions": happy_actions,
+            "test_data": {},
+            "observed_checks": happy_facts,
+            "prerequisites": [],
+            "cleanup": [],
+        },
     }]
 
     transitions = []
@@ -3644,8 +4032,9 @@ def generate_from_live_run(
         if seq not in row_by_seq:
             raise ValueError(f"Flow mapping referenced unknown transition {seq} in run {selected_run}.")
         source_row = row_by_seq[seq]
+        path_actions = json.loads(source_row.get("path_json") or "[]")
         action_data = [
-            *json.loads(source_row.get("path_json") or "[]"),
+            *path_actions,
             {
                 "kind": source_row.get("action_kind"),
                 "role": source_row.get("action_role"),
@@ -3655,6 +4044,14 @@ def generate_from_live_run(
             },
         ]
         actions = [_action_from_json(item) for item in action_data if isinstance(item, dict)]
+        source_url = _runner_safe_url(source_row.get("from_url") or "")
+        source_origin = urlparse(source_url).netloc.casefold()
+        session_host = urlparse(_runner_safe_url(session.get("start_url") or "")).netloc.casefold()
+        path_reaches_source = any(
+            str(item.get("kind") or "").casefold() in {"click", "navigate", "goto"}
+            for item in path_actions if isinstance(item, dict)
+        )
+        entry_url = source_url if source_url and source_origin == session_host and not path_reaches_source else ""
         route_lines = [_action_test_step(action) for action in actions]
         if not route_lines:
             route_lines = [f"Open {_redact_url(session['start_url'])}"]
@@ -3671,7 +4068,11 @@ def generate_from_live_run(
         observed_step = None
         if anchor and 0 < int(anchor) <= len(observed_rows):
             observed_step = {"observed_json": observed_rows[int(anchor) - 1][0] or "{}"}
-        precondition = f"Start from {_redact_url(session['start_url'])}. Follow the recorded route to the branch source; {source_note}"
+        precondition = (
+            f"Open {entry_url} with the captured session's required account and data; {source_note}"
+            if entry_url else
+            f"Start from {_redact_url(session['start_url'])}. Follow the recorded route to the branch source; {source_note}"
+        )
         source_context = _transition_source_context(
             branch, action_data[:-1], session_origin,
         )
@@ -3695,6 +4096,18 @@ def generate_from_live_run(
             "_transition_actions": action_data,
             "_transition_apis": list(branch.get("apis") or []),
             "_observed_facts": facts,
+            "_runner_payload": {
+                "case_id": f"{session_id}:{selected_run}:{seq}",
+                "source_session_id": str(session_id),
+                "source_run_id": str(selected_run),
+                "start_url": _runner_safe_url(session.get("start_url") or ""),
+                "entry_url": entry_url,
+                "route_actions": action_data,
+                "test_data": {},
+                "observed_checks": facts,
+                "prerequisites": [],
+                "cleanup": [],
+            },
         })
     if len(rows) != len(stored_rows) + 1:
         raise ValueError(
@@ -5237,6 +5650,7 @@ def write_excel(rows: list[dict], output_path: str | Path, enhanced: bool = Fals
         for row in rows if row.get("_Ref Stem") and row.get("Module")
     }
     testcase_rows = []
+    metadata_cases = []
     for row in rows:
         # NFR, BRD conflict/review, and Knowledge review records do not have
         # runnable testcase fields and are intentionally not placed here.
@@ -5284,6 +5698,17 @@ def write_excel(rows: list[dict], output_path: str | Path, enhanced: bool = Fals
         if graph_rules:
             values.append(str(row.get("Basis") or "Observed"))
         testcase_rows.append(values)
+        payload = dict(row.get("_runner_payload") or {})
+        if payload:
+            payload["claims"] = list(row.get("_claims") or payload.get("claims") or [])
+            payload.setdefault("case_id", str(row.get("_transition_key") or f"row-{len(testcase_rows)}"))
+            visible_values = dict(zip(headers, values))
+            metadata_cases.append({
+                "case_id": payload["case_id"],
+                "sheet_row": first_data_row + len(testcase_rows) - 1,
+                "payload": payload,
+                "row_sha256": _runner_row_hash(visible_values, payload),
+            })
 
     if not testcase_rows:
         print("[testcase_gen] no runnable testcase rows qualified for the workbook; "
@@ -5385,6 +5810,8 @@ def write_excel(rows: list[dict], output_path: str | Path, enhanced: bool = Fals
         review.freeze_panes = "A2"
         review.auto_filter.ref = f"A1:H{max(1, len(rule_reviews) + 1)}"
         review.sheet_view.showGridLines = False
+    if metadata_cases:
+        write_metadata_sheet(workbook, metadata_cases)
     workbook.calculation.fullCalcOnLoad = True
     workbook.calculation.forceFullCalc = True
     workbook.active = 0
@@ -5427,6 +5854,8 @@ def main():
                         help=f"maximum uncached LLM calls for live-run expected results (default: {MAX_EXPECTED_RESULT_CALLS})")
     parser.add_argument("--expected-result-max-tokens", type=int, default=MAX_TOKENS,
                         help=f"maximum output tokens per expected-result LLM call (default: {MAX_TOKENS})")
+    parser.add_argument("--refresh-expected-results", action="store_true",
+                        help="call the LLM for every expected-result batch, bypass cached answers, and cache only validated replacements")
     parser.add_argument("--probe-profiles", action="store_true",
                         help="replay captured requests and probe matched transition inputs")
     parser.add_argument("--debug-profiles", action="store_true",
@@ -5631,6 +6060,7 @@ def main():
                 vault, live_rows, expected_cache, brd_db_path=args.brd_db,
                 max_calls=args.expected_result_max_calls,
                 max_tokens=args.expected_result_max_tokens,
+                refresh_cached=args.refresh_expected_results,
             )
         except (ValueError, OpenRouterError) as exc:
             parser.error(str(exc))
