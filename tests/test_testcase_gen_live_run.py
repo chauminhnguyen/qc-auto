@@ -19,7 +19,7 @@ def make_vault(root: Path, *, sessions=("s1",), transition_rows=150, include_tra
         session_id TEXT, seq INTEGER, step_type TEXT, selector TEXT, label TEXT, value TEXT,
         input_type TEXT, page_url TEXT, tag TEXT, elem_type TEXT, role TEXT, checked INTEGER,
         is_native_control INTEGER, label_for TEXT, select_kind TEXT, selected_options_json TEXT, ts REAL,
-        action_id TEXT
+        action_id TEXT, observed_json TEXT
     )""")
     conn.execute("""CREATE TABLE session_api_events (
         session_id TEXT, seq INTEGER, method TEXT, status INTEGER, request_url TEXT,
@@ -29,7 +29,7 @@ def make_vault(root: Path, *, sessions=("s1",), transition_rows=150, include_tra
         conn.execute("INSERT INTO sessions VALUES (?, ?, ?)", (session_id, "https://example.test/home", session_id))
         conn.execute(
             "INSERT INTO steps VALUES (?, 1, 'tap', '#save', 'Save', '', '', "
-            "'https://example.test/home', 'button', 'button', 'button', NULL, 0, '', '', NULL, 1, 'a1')",
+            "'https://example.test/home', 'button', 'button', 'button', NULL, 0, '', '', NULL, 1, 'a1', NULL)",
             (session_id,),
         )
         conn.execute(
@@ -72,11 +72,11 @@ class LiveRunTestcaseGenerationTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 151)
         self.assertEqual(rows[0]["Category"], "happy-path")
-        self.assertIn("POST /api/save (HTTP 201)", rows[0]["Expected Result"])
+        self.assertEqual(rows[0]["Category"], "happy-path")
         self.assertIn("Live run run-latest transition 1:", rows[1]["Test Case Name"])
-        self.assertIn("HTTP 500", rows[2]["Expected Result"])
+        self.assertEqual(rows[2]["Category"], "observed-flow")
         self.assertIn("Live run run-latest transition 150:", rows[-1]["Test Case Name"])
-        self.assertEqual(sum("recorded live-run API outcome" in row["Expected Result"] for row in rows[1:]), 150)
+        self.assertEqual(sum(bool(row.get("Technical Evidence")) for row in rows[1:]), 150)
 
     def test_structured_loader_isolates_session_and_honors_requested_run(self):
         vault = make_vault(self.root, sessions=("s1", "s2"), transition_rows=2)
@@ -110,7 +110,7 @@ class LiveRunTestcaseGenerationTests(unittest.TestCase):
         rows = testcase_gen.generate_from_live_run(vault, "s1")
         self.assertEqual(len(rows), 2)
         self.assertIn("old-run transition 1", rows[1]["Test Case Name"])
-        self.assertIn("POST /api/continue (HTTP 200)", rows[1]["Expected Result"])
+        self.assertIn("Continue", rows[1]["Steps"])
 
     def test_malformed_records_are_rejected_before_workbook_write(self):
         vault = make_vault(self.root, transition_rows=1)
@@ -138,10 +138,11 @@ class LiveRunTestcaseGenerationTests(unittest.TestCase):
         workbook = load_workbook(output, data_only=False)
         sheet = workbook["Test Cases"]
 
-        self.assertEqual(sheet.max_column, 11)
+        self.assertEqual(sheet.max_column, 12)
         self.assertEqual(sheet.max_row, 7)
         self.assertEqual(sheet.cell(5, 1).value, "Module")
         self.assertEqual(sheet.cell(5, 11).value, "Evidence/Note")
+        self.assertEqual(sheet.cell(5, 12).value, "Technical Evidence")
         self.assertEqual(sheet.cell(6, 10).value, "Untested")
         self.assertEqual(sheet.cell(7, 10).value, "Untested")
         workbook.close()

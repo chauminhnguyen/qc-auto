@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import gzip
+import json
 import re
 import time
 from datetime import datetime, timezone
@@ -70,6 +71,30 @@ SCREENSHOT_FULL_PAGE = False      # False = just the viewport (fast, reliable); 
 # single "inputText" test step than an 'input' listener would.
 CAPTURE_STEPS = True
 
+PAGE_OBSERVATION_SCRIPT = """() => {
+  const visible = (el) => {
+    const style = getComputedStyle(el), rect = el.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' &&
+      Number(style.opacity || 1) > 0 && rect.width > 0 && rect.height > 0;
+  };
+  const textOf = (el) => (el.innerText || el.textContent || '').trim().slice(0, 500);
+  const messages = Array.from(document.querySelectorAll(
+    '[role="alert"], [role="status"], [aria-live], .field-validation-error, ' +
+    '.validation-summary-errors, .message-error, .message-success, .notification, .toast'
+  )).filter(visible).map(textOf).filter(Boolean);
+  const headings = Array.from(document.querySelectorAll('h1, main h2, [role="main"] h2'))
+    .filter(visible).map(textOf).filter(Boolean);
+  const counters = {};
+  for (const [key, selector] of Object.entries({
+    cart: '.cart-qty, .cart-label .count, a[href*="/cart"] .count',
+    wishlist: '.wishlist-qty, .wishlist-label .count, a[href*="/wishlist"] .count'
+  })) {
+    const el = document.querySelector(selector);
+    counters[key] = el && visible(el) ? textOf(el) : '';
+  }
+  return { url: location.href, title: document.title || '', headings, messages, counters };
+}"""
+
 STEP_SCRIPT = """
 (() => {
   function labelForEl(el) {
@@ -98,10 +123,12 @@ STEP_SCRIPT = """
     if (alt && alt.trim()) return alt.trim().slice(0, 80);
     const image = el.querySelector && el.querySelector('img[alt]');
     if (image && image.getAttribute('alt').trim()) return image.getAttribute('alt').trim().slice(0, 80);
-    const text = (el.innerText || el.value || '').trim();
-    if (text) return text.slice(0, 80);
     const placeholder = el.getAttribute && el.getAttribute('placeholder');
     if (placeholder && placeholder.trim()) return placeholder.trim().slice(0, 80);
+    const tag = (el.tagName || '').toLowerCase();
+    const text = tag === 'input' || tag === 'textarea' || tag === 'select'
+      ? '' : (el.innerText || '').trim();
+    if (text) return text.slice(0, 80);
     return '';
   }
 
@@ -182,11 +209,57 @@ STEP_SCRIPT = """
     };
   }
 
+  function visibleSnapshot() {
+    const visible = (el) => {
+      const style = getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style.visibility !== 'hidden' && style.display !== 'none' &&
+        Number(style.opacity || 1) > 0 && rect.width > 0 && rect.height > 0;
+    };
+    const textOf = (el) => (el.innerText || el.textContent || '').trim().slice(0, 500);
+    const messages = Array.from(document.querySelectorAll(
+      '[role="alert"], [role="status"], [aria-live], .field-validation-error, ' +
+      '.validation-summary-errors, .message-error, .message-success, .notification, .toast'
+    )).filter(visible).map(textOf).filter(Boolean);
+    const headings = Array.from(document.querySelectorAll('h1, main h2, [role="main"] h2'))
+      .filter(visible).map(textOf).filter(Boolean);
+    const counters = {};
+    for (const [key, selector] of Object.entries({
+      cart: '.cart-qty, .cart-label .count, a[href*="/cart"] .count',
+      wishlist: '.wishlist-qty, .wishlist-label .count, a[href*="/wishlist"] .count'
+    })) {
+      const el = document.querySelector(selector);
+      counters[key] = el && visible(el) ? textOf(el) : '';
+    }
+    return { url: location.href, title: document.title || '', headings, messages, counters };
+  }
+
+  function observeAfter(key) {
+    const seen = [];
+    const started = Date.now();
+    const poll = setInterval(() => {
+      try {
+        const current = visibleSnapshot();
+        for (const message of current.messages || []) if (!seen.includes(message)) seen.push(message);
+        if (Date.now() - started >= 2000) {
+          clearInterval(poll);
+          current.messages = seen;
+          window.__onUserObservation__(key, current);
+        }
+      } catch (_) {
+        clearInterval(poll);
+      }
+    }, 100);
+  }
+
   document.addEventListener('click', (e) => {
     try {
       const el = clickTarget(e.target);
       const info = classify(el);
+      const actionKey = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
       window.__onUserClick__({
+        action_key: actionKey,
+        observed_before: visibleSnapshot(),
         selector: bestSelector(el),
         label: bestLabel(el),
         page_url: window.location.href,
@@ -198,6 +271,7 @@ STEP_SCRIPT = """
         is_native_control: info.isNativeControl,
         label_for: info.labelForText,
       });
+      observeAfter(actionKey);
     } catch (err) { /* never break the page */ }
   }, true);
 
@@ -213,7 +287,10 @@ STEP_SCRIPT = """
       // same toggle as a separate, redundant Maestro step.
       if (tag === 'input' && (inputType === 'checkbox' || inputType === 'radio')) return;
       const info = classify(el);
+      const actionKey = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
       window.__onUserInput__({
+        action_key: actionKey,
+        observed_before: visibleSnapshot(),
         selector: bestSelector(el),
         label: bestLabel(el),
         // Password characters never leave the browser -- masked to null
@@ -227,6 +304,7 @@ STEP_SCRIPT = """
         selected_options: info.selectedOptions,
         label_for: info.labelForText,
       });
+      observeAfter(actionKey);
     } catch (err) { /* never break the page */ }
   }, true);
 })();
@@ -385,6 +463,16 @@ async def writer_loop(queue: asyncio.Queue, vault: VaultWriter, stop_event: asyn
         try:
             if item.get("kind") == "step":
                 await asyncio.to_thread(vault.record_step, session_id, item)
+            elif item.get("kind") == "observation":
+                await asyncio.to_thread(
+                    vault.record_step_observation, session_id,
+                    str(item.get("action_id") or ""), item.get("observed") or {},
+                )
+            elif item.get("kind") == "dialog_observation":
+                await asyncio.to_thread(
+                    vault.record_step_dialog, session_id,
+                    str(item.get("action_id") or ""), str(item.get("message") or ""),
+                )
             else:
                 await asyncio.to_thread(vault.ingest, item, session_id)
                 print(f"  captured: {item['method']} {item['url']}")
@@ -427,10 +515,13 @@ async def main():
     last_screenshot = {"ts": 0}
     api_event_sequence = {"value": 0}
     action_sequence = {"value": 0}
+    client_actions: dict[str, str] = {}
 
     async def on_click(payload: dict):
         action_sequence["value"] += 1
         action_id = f"{session_id}-action-{action_sequence['value']}"
+        if payload.get("action_key"):
+            client_actions[str(payload["action_key"])] = action_id
         last_click.update({
             "data": payload,
             "ts": payload.get("ts", time.time() * 1000),
@@ -440,6 +531,7 @@ async def main():
             await queue.put({
                 "kind": "step", "step_type": "tap",
                 "action_id": action_id,
+                "observed": {"before": payload.get("observed_before") or {}},
                 "selector": payload.get("selector"), "label": payload.get("label"),
                 "value": None, "input_type": None,
                 "page_url": payload.get("page_url"), "ts": payload.get("ts"),
@@ -454,8 +546,14 @@ async def main():
 
     async def on_input(payload: dict):
         if CAPTURE_STEPS and state["enabled"]:
+            action_sequence["value"] += 1
+            action_id = f"{session_id}-action-{action_sequence['value']}"
+            if payload.get("action_key"):
+                client_actions[str(payload["action_key"])] = action_id
             await queue.put({
                 "kind": "step", "step_type": "input",
+                "action_id": action_id,
+                "observed": {"before": payload.get("observed_before") or {}},
                 "selector": payload.get("selector"), "label": payload.get("label"),
                 "value": payload.get("value"), "input_type": payload.get("input_type"),
                 "page_url": payload.get("page_url"), "ts": payload.get("ts"),
@@ -466,6 +564,14 @@ async def main():
                 "tag": payload.get("tag"), "select_kind": payload.get("select_kind"),
                 "selected_options": payload.get("selected_options"),
                 "label_for": payload.get("label_for"),
+            })
+
+    async def on_observation(action_key: str, observed: dict):
+        action_id = client_actions.pop(str(action_key), None)
+        if action_id and state["enabled"]:
+            await queue.put({
+                "kind": "observation", "action_id": action_id,
+                "observed": observed or {},
             })
 
     last_nav = {"url": None}
@@ -480,12 +586,36 @@ async def main():
         # skip it if the URL didn't actually change since the last one we logged.
         if frame.url == last_nav["url"]:
             return
+        before_url = last_nav["url"]
         last_nav["url"] = frame.url
+        action_age = time.time() * 1000 - float(last_click.get("ts") or 0)
+        click_action_id = last_click.get("action_id") if 0 <= action_age <= 2000 else None
+        before_snapshot = (
+            (last_click.get("data") or {}).get("observed_before")
+            if click_action_id else None
+        ) or {"url": before_url or ""}
+        action_sequence["value"] += 1
+        navigation_action_id = f"{session_id}-action-{action_sequence['value']}"
         await queue.put({
             "kind": "step", "step_type": "navigate",
+            "action_id": navigation_action_id,
             "selector": None, "label": None, "value": None, "input_type": None,
             "page_url": frame.url, "ts": time.time() * 1000,
+            "observed": {"before": before_snapshot},
         })
+        async def capture_navigation_result():
+            await asyncio.sleep(1)
+            page = frame.page
+            if page.is_closed():
+                return
+            try:
+                snapshot = await page.evaluate(PAGE_OBSERVATION_SCRIPT)
+                await queue.put({"kind": "observation", "action_id": navigation_action_id, "observed": snapshot})
+                if click_action_id:
+                    await queue.put({"kind": "observation", "action_id": click_action_id, "observed": snapshot})
+            except Exception:
+                pass
+        asyncio.create_task(capture_navigation_result())
 
     async def maybe_take_screenshot(response) -> str | None:
         """Snaps the tab this response belongs to, a beat after it resolves
@@ -593,6 +723,22 @@ async def main():
     def attach_navigation_tracking(pg):
         pg.on("framenavigated", lambda frame: asyncio.create_task(on_navigate(frame)))
 
+        async def on_dialog(dialog):
+            click = last_click.get("data")
+            action_id = last_click.get("action_id")
+            age = time.time() * 1000 - float(last_click.get("ts") or 0)
+            if action_id and 0 <= age <= 2000:
+                await queue.put({
+                    "kind": "dialog_observation", "action_id": action_id,
+                    "message": str(dialog.message or ""),
+                })
+            try:
+                await dialog.dismiss()
+            except Exception:
+                pass
+
+        pg.on("dialog", lambda dialog: asyncio.create_task(on_dialog(dialog)))
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         context = await browser.new_context()
@@ -600,6 +746,7 @@ async def main():
         # Context-level instrumentation covers every tab/page opened in this session
         await context.expose_function("__onUserClick__", on_click)
         await context.expose_function("__onUserInput__", on_input)
+        await context.expose_function("__onUserObservation__", on_observation)
         await context.add_init_script(STEP_SCRIPT)
         context.on("response", lambda r: asyncio.create_task(handle_response(r)))
         # New tabs opened during the session (e.g. target=_blank) get their

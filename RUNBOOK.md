@@ -262,6 +262,87 @@ python -m capture_app.workflows.native_runner --vault ./testVault --session <SES
 
 When a runtime failure has a saved screenshot, the runner pauses with the failed step, current URL, failure details, and screenshot path. Inspect the screenshot, then type `CONTINUE` to skip only that failed step and resume at the next captured step in the same browser session; press Enter or send EOF to stop. If a screenshot could not be saved, replay stops rather than inviting a screenshot-based override. Existing safety holds are never overridable through this prompt: `--allow-submit` and `--allow-delete` remain required where applicable. Reports mark approved skips as “completed with human override,” not as clean passes, and the command returns a nonzero exit status. Use the mode only when a person is available to inspect the evidence: prior actions may already have changed server state, and continuing may perform additional actions or submit data.
 
+## Android device testing with Maestro
+
+Install Android SDK Platform Tools and make sure `adb` is on `PATH`. Unlock the phone, enable USB debugging, and verify that `adb devices -l` lists it with state `device`. Android capture commands require an explicit serial with `--device-id`. Direct ADB calls go through the capture allowlist; capture does not install an APK or helper app.
+
+The starter flow in `android/flows/smoke.yaml` launches the configured app and checks for visible text. Supply a value that is stable on the app's initial screen:
+
+```powershell
+python -m capture_app.workflows.maestro_device_runner `
+  --flows .\android\flows\smoke.yaml `
+  --app-id com.example.app `
+  --device-id "YOUR_DEVICE_SERIAL" `
+  --expected-text "Home"
+```
+
+Provide the selected serial from `adb devices -l` with `--device-id <SERIAL>`. A flow directory may be passed to run a suite of `.yaml` and `.yml` flows. Each run checks the app installation before starting Maestro and writes `summary.json`, `commands.log`, a JUnit report, and Maestro test artifacts under `out/android_runs/`. A preflight error or failed Maestro run returns a nonzero exit code. Profiles control whether Maestro is permitted; it is disabled for the restricted-app profile template.
+
+For custom flows, use `${APP_ID}` as the flow's `appId` and begin with `launchApp`; the runner supplies `APP_ID` automatically. The starter flow also reads `${EXPECTED_TEXT}`, supplied by `--expected-text`.
+
+### Android capture runs (Maestro + ADB + mitmproxy)
+
+Android profiles live in `android/apps.yaml`. The `speedtest` profile targets Ookla Speedtest. Add another profile with its package ID, flow path, network source order, host allowlist, `ui_snapshots`, and `maestro_permitted` settings when switching apps. Use test accounts. The tool warns when the vault path appears to be inside Git or a common synced folder. An empty host allowlist is discovery mode; the run summary lists observed hosts, and proxy connection/TLS failures by host when no events arrive.
+
+Manual capture is for operating the app directly on the phone while recording touch interactions and network evidence. It never taps for you. It does not save screenshots, recordings, raw proxy archives, or raw logcat. The Speedtest profile enables text hierarchy snapshots; the restricted profile template disables snapshots and Maestro. With snapshots disabled, touch steps contain only the `secure_input` placeholder (no label or coordinates). Editable/password fields, keyboard windows, and digit-keypad-like screens are also treated as secure input. Foreground package/activity is checked from `dumpsys window`; steps outside the profile app are discarded. Hierarchy text is sanitized before writing. Confirm with your company that text hierarchy dumps are allowed before enabling them.
+
+The manual run summary includes proxy diagnostics without request contents: total, phone-matched, and other client connections; HTTP CONNECTs; HTTP request/response counts; TLS handshake successes/failures; upstream connection failures; and per-host counts. Zero total proxy clients usually means the phone did not route traffic to the laptop proxy. Other-client connections with zero phone-matched connections can indicate the phone's IP differs from its ADB serial. CONNECTs with TLS client failures means the app reached the proxy but did not complete TLS with it. These counts help distinguish proxy setup from app traffic that is pinned or uses a non-HTTP protocol.
+
+Start a manual session with the selected device serial:
+
+```powershell
+python -m capture_app.workflows.android_capture manual `
+  --app speedtest `
+  --device-id "YOUR_DEVICE_SERIAL"
+```
+
+Use the app on the phone, then type `q` and Enter in the terminal to stop. The session is checkpointed periodically and partial evidence is retained if ADB disconnects or the process is interrupted. Touch events require Android to grant `getevent` access; if access is denied, the summary reports the failure. Touch timestamps are calibrated from `/proc/uptime`; calibration is refreshed during long sessions. Each hierarchy attempt runs about 800 ms after touch-up, and timed out or rate-limited snapshots are listed as missing UI evidence. Check the phone during a real-device pilot for app warnings, logout, or other reactions when hierarchy dumps run.
+
+The network source order is selected in each profile: `proxy`, `app_log`, and `logcat`. A source that starts and returns no events is still a valid run; interaction evidence continues to be recorded. Startup/read/parse failures allow the runner to try the next configured source. For an in-app export, choose the app's normalized JSON export option, save it in the phone's Downloads folder, copy the file to the laptop yourself, and pass that local path with `--network-export <PATH>`. The JSON format is a list of events or an object with an `events` list; each event has `method`, `url`, and optional `status`, headers, bodies, and `ts`. HAR 1.2 and normalized JSON can also be imported with `import-network`.
+
+Install the optional laptop-side capture dependencies into the project environment if using the proxy source:
+
+```powershell
+python -m pip install -r requirements-android.txt
+```
+
+For the scripted Speedtest results run, clear the proxy in the phone's current Wi-Fi settings, then run:
+
+```powershell
+python -m capture_app.workflows.android_capture results `
+  --app speedtest `
+  --device-id "YOUR_DEVICE_SERIAL"
+```
+
+For a separate scripted API run, connect the phone and laptop to the same trusted network. On first setup, start a temporary proxy to create and serve the mitmproxy CA:
+
+```powershell
+mitmdump --listen-host 0.0.0.0 --listen-port 8080
+```
+
+Set the phone's Wi-Fi proxy to the laptop's LAN IPv4 address (find it with `ipconfig`) and port `8080`. In the phone browser, open `http://mitm.it`, download the Android CA, and install it through Android's certificate settings. Stop the temporary proxy with Ctrl+C. The capture command starts its own proxy on the same port. Do not use the API run for Speedtest measurements.
+
+Then run:
+
+```powershell
+python -m capture_app.workflows.android_capture api `
+  --app speedtest `
+  --device-id "YOUR_DEVICE_SERIAL"
+```
+
+The scripted runner starts and stops `mitmdump` on the laptop. Manual API capture uses the same laptop proxy source when configured; set the phone's Wi-Fi proxy and trust its CA yourself. Capture never bypasses certificate pinning. Apps that ignore the proxy, reject the CA, or use non-HTTP transports may yield no API events. In that case interactions are still saved, and proxy host failure counts appear in the summary.
+
+Every UI action in a scripted capture flow should be preceded by `waitForAnimationToEnd` and `runScript: ../scripts/marker.js` with a unique `STEP_ID` and label. Hierarchy dumps run after the main flow in separate Maestro prefix replays. Prefix replays require linear top-level flows and repeat earlier actions, so only enable `allow_prefix_replay: true` after confirming those actions are safe to repeat. Process-scoped logcat is redacted as it is written, and `clock_offset.json` records device/laptop time alignment. Maestro is permitted for the Speedtest profile; do not enable it for restricted profiles.
+
+Run results are saved under `out/android_runs/<run-id>/`. API events and marker steps are ingested into the configured vault session, so `param_report.py` and the session graph builder can read them. To import an app export:
+
+```powershell
+python -m capture_app.workflows.android_capture import-network `
+  --app speedtest --input .\network.har --format har
+```
+
+Normalized JSON is a list, or an object with an `events` list. Each event has `method`, `url`, `status`, `request_headers`, `payload`, `response_headers`, `response_body`, and `ts` (epoch seconds or ISO-8601); optional `response_ts`, `step_id`, and `correlation_status` fields preserve timing/correlation. Manual events are linked to the interaction window by time. Late or unassigned requests are marked ambiguous; steps with no calls are valid. Image and PDF responses are stored only as content type, byte size, and SHA-256 hash.
+
 **Get `d3.min.js`.** `visualizer.py` looks for a file literally named `d3.min.js` next to itself and copies it alongside every HTML report it writes. Without it, the interactive graph won't render (you'll still get a static fallback view). Download one version and drop it in the same folder:
 
 ```bash
@@ -348,7 +429,11 @@ python testcase_gen.py --vault ./ObsidianVault --session <SESSION_ID> --out test
 python testcase_gen.py --vault ./ObsidianVault --session <SESSION_ID> --run-id <LIVE_RUN_ID> --out testcases.xlsx
 ```
 
-`live_runner.py` persists its ordered UI transitions in the capture index, linked to the capture session and live-run id. `testcase_gen.py` reads the captured steps and API observations plus one live-run transition set; it makes no model calls. By default it uses the latest live-run data for the session. The workbook contains one full happy-path case and one case per observed transition, including transitions whose actions were held or failed.
+`live_runner.py` persists its ordered UI transitions in the capture index, linked to the capture session and live-run id. `testcase_gen.py` reads the captured steps and API observations plus one live-run transition set. By default it uses the latest live-run data for the session and makes no model calls. The workbook contains one full happy-path case and one case per observed transition, including transitions whose actions were held or failed.
+
+Field profiles are opt-in. Run `python testcase_gen.py --vault ./ObsidianVault --session <SESSION_ID> --run-id <LIVE_RUN_ID> --probe-profiles` to replay each matched API baseline and send up to 10 one-field probes per recorded input. Mutating endpoints require confirmation. If captured credentials were redacted, the command prompts for replacements; they stay in memory and are not included in probe evidence or model prompts. The raw, redacted probe log is resumable in the capture index. Use `--debug-profiles` to inspect stored outcome groups and their supporting probe rows without sending requests, and `--profile-driven` to generate additional cases from an existing run's profiles. Probe and profile-driven modes append a Technical Evidence column; running with no new flags preserves the existing workbook layout and behavior. Profiles only cover inputs that can be conservatively linked to request parameters.
+
+To add written BRD/Knowledge rules from the chat index, combine `--graph-rules` with probing or profile-driven generation. Example: `python testcase_gen.py --vault ./ObsidianVault --session <SESSION_ID> --run-id <LIVE_RUN_ID> --probe-profiles --graph-rules --out testcases.xlsx`. Graph weights rank candidates only; field-name/label relevance and cited source node IDs are required before a rule is used. The enhanced workbook adds `Basis`, and contradictions appear on a `Rule Review` sheet. Contradicted rules do not generate rule-derived cases. `--debug-field "Recipient's Email" --graph-rules` prints graph candidates, stored probes, and constraint states without an LLM call or HTTP replay.
 
 - `--role request` = "how do I **set/change** this param" (a form that submits it).
 - `--role response` = "how do I **see** this param" (an action whose response contains it).

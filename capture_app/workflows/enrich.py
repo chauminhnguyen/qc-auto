@@ -38,6 +38,7 @@ import json
 import os
 import time
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from capture_app.env import load_project_env
 import httpx
@@ -207,6 +208,20 @@ def apply_variant_to_request(api: dict, variant: dict):
     content_type = headers.get("Content-Type", headers.get("content-type", ""))
     url = api["full_url"]
     method = api["method"]
+
+    # Bodyless methods carry generated params in the URL. Previously these
+    # variants were silently discarded, causing every GET probe to repeat the
+    # captured URL unchanged.
+    if method.upper() in {"GET", "HEAD", "OPTIONS"}:
+        parts = urlsplit(url)
+        variant_names = {str(key) for key in variant}
+        query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
+                 if key not in variant_names]
+        query.extend((str(key), value) for key, values in variant.items()
+                     for value in (values if isinstance(values, list) else [values]))
+        url = urlunsplit((parts.scheme, parts.netloc, parts.path,
+                          urlencode(query, doseq=True), parts.fragment))
+        return url, method, headers, None, None
 
     if "json" in content_type:
         return url, method, headers, variant, None

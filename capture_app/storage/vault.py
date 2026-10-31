@@ -45,6 +45,7 @@ from pathlib import Path
 from urllib.parse import urlparse, urlsplit, urlunsplit, parse_qs, parse_qsl, urlencode
 
 MAX_BODY_CHARS = 5000       # truncate huge payloads/responses in the .md view
+MAX_BASELINE_RESPONSE_CHARS = 100_000  # retain complete control responses for classification
 MAX_EXAMPLE_VALUES = 10     # how many distinct example values to keep per param (per role)
 MAX_RESPONSE_LIST_ITEMS = 20  # cap when a response body is a JSON array of objects
 MAX_SCREENSHOTS_PER_API = 5   # keep only the N most recent UI screenshots per endpoint
@@ -520,6 +521,60 @@ class VaultWriter:
             )
             """
         )
+        # Probe evidence is kept separate from variant_runs: the raw probe log
+        # is the source for resumable, field-scoped profiles and is never sent
+        # to a model. Sensitive field values are redacted before insertion.
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS field_probe_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_key TEXT NOT NULL,
+                api_ref TEXT NOT NULL,
+                transition_key TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                probe_kind TEXT NOT NULL,
+                probe_value_json TEXT,
+                outcome TEXT NOT NULL,
+                response_status INTEGER,
+                response_message TEXT,
+                response_body TEXT,
+                ui_hint TEXT,
+                match_confidence REAL,
+                source_of_truth TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        probe_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(field_probe_log)")}
+        for col, decl in (("response_body", "TEXT"), ("ui_hint", "TEXT"),
+                          ("match_confidence", "REAL"), ("source_of_truth", "TEXT")):
+            if col not in probe_cols:
+                self.conn.execute(f"ALTER TABLE field_probe_log ADD COLUMN {col} {decl}")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_field_probe_run ON field_probe_log(run_key, api_ref, field_name)"
+        )
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS field_written_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_key TEXT NOT NULL,
+                api_ref TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                constraint_kind TEXT NOT NULL,
+                rule_value_json TEXT,
+                applies_to TEXT,
+                source_node_ids_json TEXT NOT NULL,
+                ambiguity TEXT,
+                strength TEXT NOT NULL,
+                state TEXT NOT NULL,
+                evidence_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                UNIQUE(run_key,api_ref,field_name,constraint_kind,rule_value_json,source_node_ids_json)
+            )
+        """)
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_field_rules_run ON field_written_rules(run_key,api_ref,field_name)"
+        )
+        self.conn.commit()
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -562,7 +617,8 @@ class VaultWriter:
                 label_for TEXT,
                 select_kind TEXT,
                 selected_options_json TEXT,
-                action_id TEXT
+                action_id TEXT,
+                observed_json TEXT
             )
             """
         )
@@ -574,7 +630,7 @@ class VaultWriter:
             ("tag", "TEXT"), ("elem_type", "TEXT"), ("role", "TEXT"),
             ("checked", "INTEGER"), ("is_native_control", "INTEGER"),
             ("label_for", "TEXT"), ("select_kind", "TEXT"),
-            ("selected_options_json", "TEXT"), ("action_id", "TEXT"),
+            ("selected_options_json", "TEXT"), ("action_id", "TEXT"), ("observed_json", "TEXT"),
         ):
             if col not in steps_cols:
                 self.conn.execute(f"ALTER TABLE steps ADD COLUMN {col} {decl}")
@@ -760,7 +816,8 @@ class VaultWriter:
         safe_record["request_headers"] = _redact_headers(record.get("request_headers"))
         safe_record["response_headers"] = _redact_headers(record.get("response_headers"))
         safe_record["payload"] = _redact_body(record.get("payload"))[:MAX_BODY_CHARS]
-        safe_record["response_body"] = _redact_body(record.get("response_body"))[:MAX_BODY_CHARS]
+        response_event_body = _redact_body(record.get("response_body"))[:MAX_BASELINE_RESPONSE_CHARS]
+        safe_record["response_body"] = response_event_body[:MAX_BODY_CHARS]
 
         headers_json = json.dumps(safe_record["request_headers"], indent=2)
         response_headers_json = json.dumps(safe_record["response_headers"], indent=2)
@@ -839,7 +896,7 @@ class VaultWriter:
             self._touch_session_api_locked(session_id, domain, ref_stem)
             self._record_session_api_event_locked(
                 session_id, ref_stem, domain, method, record.get("status"),
-                response_str, record.get("ts"), request_url, headers_json,
+                response_event_body, record.get("ts"), request_url, headers_json,
                 payload_str, response_headers_json, entry_point,
                 record.get("correlation_status"), record.get("event_seq"), record.get("action_id"),
             )
@@ -892,7 +949,7 @@ class VaultWriter:
                        entry_point, correlation_status, action_id)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (session_id, seq, ref_stem, domain, method, status,
-                 (response_body or "")[:MAX_BODY_CHARS], ts, request_url,
+                 (response_body or "")[:MAX_BASELINE_RESPONSE_CHARS], ts, request_url,
                  request_headers_json, request_body, response_headers_json,
                  entry_point, correlation_status, action_id),
         )
@@ -985,14 +1042,63 @@ class VaultWriter:
                 """INSERT INTO steps
                    (session_id, seq, step_type, selector, label, value, input_type, page_url, ts,
                     tag, elem_type, role, checked, is_native_control, label_for, select_kind,
-                    selected_options_json, action_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    selected_options_json, action_id, observed_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (session_id, seq, safe_step.get("step_type"), safe_step.get("selector"), safe_step.get("label"),
                  safe_step.get("value"), safe_step.get("input_type"), safe_step.get("page_url"), safe_step.get("ts"),
                  safe_step.get("tag"), safe_step.get("elem_type"), safe_step.get("role"),
                  safe_step.get("checked"), safe_step.get("is_native_control"), safe_step.get("label_for"),
                  safe_step.get("select_kind"), json.dumps(selected_options) if selected_options else None,
-                 safe_step.get("action_id")),
+                 safe_step.get("action_id"), json.dumps(safe_step.get("observed"), ensure_ascii=False)
+                 if safe_step.get("observed") else None),
+            )
+            self.conn.commit()
+
+    def record_step_observation(self, session_id: str, action_id: str, observed: dict):
+        """Attach a delayed visible-page snapshot to its recorded UI action."""
+        safe_observed = _redact_structured_value(observed or {})
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT observed_json FROM steps WHERE session_id=? AND action_id=?",
+                (session_id, action_id),
+            ).fetchone()
+            try:
+                current = json.loads(row[0] or "{}") if row else {}
+            except (TypeError, json.JSONDecodeError):
+                current = {}
+            if isinstance(safe_observed, dict) and "before" not in safe_observed and "after" not in safe_observed:
+                current["after"] = safe_observed
+                safe_observed = current
+            elif isinstance(safe_observed, dict):
+                current.update(safe_observed)
+                safe_observed = current
+            self.conn.execute(
+                "UPDATE steps SET observed_json=? WHERE session_id=? AND action_id=?",
+                (json.dumps(safe_observed, ensure_ascii=False), session_id, action_id),
+            )
+            self.conn.commit()
+
+    def record_step_dialog(self, session_id: str, action_id: str, message: str):
+        """Append an exact browser dialog message to the action's observation."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT observed_json FROM steps WHERE session_id=? AND action_id=?",
+                (session_id, action_id),
+            ).fetchone()
+            if not row:
+                return
+            try:
+                observed = json.loads(row[0] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                observed = {}
+            after = observed.setdefault("after", {})
+            messages = after.setdefault("messages", [])
+            safe_message = str(_redact_structured_value(message) or "")[:500]
+            if safe_message:
+                messages.append(safe_message)
+            self.conn.execute(
+                "UPDATE steps SET observed_json=? WHERE session_id=? AND action_id=?",
+                (json.dumps(observed, ensure_ascii=False), session_id, action_id),
             )
             self.conn.commit()
 
@@ -1952,6 +2058,7 @@ The same name may exist as a completely separate, independently-defined param un
                         stats["params_removed"] += 1
 
                 self.conn.execute("DELETE FROM variant_runs WHERE api_id=?", (api_id,))
+                self.conn.execute("DELETE FROM field_probe_log WHERE api_ref=?", (ref_stem,))
                 self.conn.execute("DELETE FROM apis WHERE id=?", (api_id,))
                 self.conn.commit()
 
@@ -2146,6 +2253,112 @@ The same name may exist as a completely separate, independently-defined param un
                 resource_key = self._resource_key(domain, url_path)
                 for name, value in self._extract_response_params(safe_body).items():
                     self._upsert_param(name, value, ref_stem, resource_key, source="response")
+
+    def save_field_probe(self, run_key: str, api_ref: str, transition_key: str,
+                         field_name: str, probe_kind: str, probe_value,
+                         outcome: str, response_status, response_message: str,
+                         response_body: str = "", ui_hint: str = "",
+                         match_confidence: float | None = None,
+                         source_of_truth: str = "observed probe behavior") -> int:
+        """Persist one redacted probe observation and return its evidence id."""
+        sensitive_probe = _is_sensitive_field(field_name)
+        safe_value = ("[TEST VALUE REQUIRED]" if sensitive_probe
+                      else _redact_structured_value(probe_value))
+        # Sensitive probe responses can echo submitted values in arbitrary
+        # formats. Do not persist their response text at all.
+        safe_message = "" if sensitive_probe else _redact_body(str(response_message or ""))[:1000]
+        response_limit = (MAX_BASELINE_RESPONSE_CHARS if probe_kind in {"baseline", "control"}
+                          else MAX_BODY_CHARS)
+        safe_body = "" if sensitive_probe else _redact_body(str(response_body or ""))[:response_limit]
+        with self.lock:
+            cursor = self.conn.execute(
+                """INSERT INTO field_probe_log
+                   (run_key, api_ref, transition_key, field_name, probe_kind,
+                    probe_value_json, outcome, response_status, response_message,
+                    response_body, ui_hint, match_confidence, source_of_truth, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (run_key, api_ref, transition_key, field_name, probe_kind,
+                 json.dumps(safe_value, ensure_ascii=False), outcome, response_status,
+                 safe_message, safe_body, ui_hint, match_confidence, source_of_truth,
+                 datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            )
+            self.conn.commit()
+            return int(cursor.lastrowid)
+
+    def get_field_probe_log(self, run_key: str, api_ref: str | None = None) -> list[dict]:
+        query = "SELECT id,run_key,api_ref,transition_key,field_name,probe_kind,probe_value_json,outcome,response_status,response_message,response_body,ui_hint,match_confidence,source_of_truth,created_at FROM field_probe_log WHERE run_key=?"
+        args: list = [run_key]
+        if api_ref is not None:
+            query += " AND api_ref=?"
+            args.append(api_ref)
+        query += " ORDER BY id"
+        result = []
+        for row in self.conn.execute(query, args):
+            item = dict(zip(("id", "run_key", "api_ref", "transition_key", "field_name",
+                             "probe_kind", "probe_value_json", "outcome", "response_status",
+                             "response_message", "response_body", "ui_hint", "match_confidence",
+                             "source_of_truth", "created_at"), row))
+            try:
+                item["probe_value"] = json.loads(item.pop("probe_value_json") or "null")
+            except json.JSONDecodeError:
+                item["probe_value"] = None
+            result.append(item)
+        return result
+
+    def save_field_written_rule(self, run_key: str, api_ref: str, field_name: str,
+                                constraint_kind: str, value, applies_to: str,
+                                source_node_ids: list[str], ambiguity: str,
+                                strength: str = "candidate", state: str = "unverified",
+                                evidence: list | None = None) -> int:
+        from datetime import datetime, timezone
+        safe_value = _redact_structured_value(value)
+        with self.lock:
+            self.conn.execute("""INSERT OR IGNORE INTO field_written_rules
+                (run_key,api_ref,field_name,constraint_kind,rule_value_json,applies_to,
+                 source_node_ids_json,ambiguity,strength,state,evidence_json,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (run_key, api_ref, field_name, constraint_kind,
+                 json.dumps(safe_value, ensure_ascii=False), str(applies_to or ""),
+                 json.dumps(sorted(set(map(str, source_node_ids))), ensure_ascii=False),
+                 _redact_body(str(ambiguity or ""))[:500], str(strength), str(state),
+                 json.dumps(evidence or [], ensure_ascii=False),
+                 datetime.now(timezone.utc).isoformat(timespec="seconds")))
+            row = self.conn.execute("""SELECT id FROM field_written_rules WHERE run_key=? AND api_ref=?
+                AND field_name=? AND constraint_kind=? AND rule_value_json=? AND source_node_ids_json=?""",
+                (run_key, api_ref, field_name, constraint_kind,
+                 json.dumps(safe_value, ensure_ascii=False),
+                 json.dumps(sorted(set(map(str, source_node_ids))), ensure_ascii=False))).fetchone()
+            self.conn.commit()
+            return int(row[0])
+
+    def get_field_written_rules(self, run_key: str, api_ref: str | None = None) -> list[dict]:
+        query = "SELECT * FROM field_written_rules WHERE run_key=?"
+        args: list = [run_key]
+        if api_ref is not None:
+            query += " AND api_ref=?"
+            args.append(api_ref)
+        query += " ORDER BY id"
+        result = []
+        cursor = self.conn.execute(query, args)
+        columns = [column[0] for column in cursor.description]
+        for row in cursor:
+            item = dict(zip(columns, row))
+            for source, target, fallback in (
+                ("rule_value_json", "value", None), ("source_node_ids_json", "source_node_ids", []),
+                ("evidence_json", "evidence", []),
+            ):
+                try:
+                    item[target] = json.loads(item.pop(source) or "null")
+                except json.JSONDecodeError:
+                    item[target] = fallback
+            result.append(item)
+        return result
+
+    def update_field_written_rule(self, rule_id: int, state: str, evidence: list) -> None:
+        with self.lock:
+            self.conn.execute("UPDATE field_written_rules SET state=?,evidence_json=? WHERE id=?",
+                              (state, json.dumps(evidence, ensure_ascii=False), int(rule_id)))
+            self.conn.commit()
 
     def set_param_definition(self, name: str, resource_key: str, definition: str):
         with self.lock:

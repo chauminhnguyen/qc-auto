@@ -1,0 +1,30 @@
+appId: ${APP_ID}
+env:
+  SETTLE_MS: 750
+---
+- waitForAnimationToEnd:
+    timeout: ${SETTLE_MS}
+- runScript:
+    file: ../scripts/marker.js
+    env:
+      STEP_ID: launch-app
+      STEP_LABEL: Launch app
+      ACTION_KIND: navigate
+- launchApp
+- waitForAnimationToEnd:
+    timeout: ${SETTLE_MS}
+- runScript:
+    file: ../scripts/marker.js
+    env:
+      STEP_ID: home-screen
+      STEP_LABEL: Home screen
+      ACTION_KIND: observe
+- assertVisible: ${EXPECTED_TEXT}
+- waitForAnimationToEnd:
+    timeout: ${SETTLE_MS}
+- runScript:
+    file: ../scripts/marker.js
+    env:
+      STEP_ID: __end__
+      STEP_LABEL: End of smoke flow
+      ACTION_KIND: observe

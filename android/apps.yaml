@@ -1,0 +1,44 @@
+apps:
+  speedtest:
+    app_id: org.zwanoo.android.speedtest
+    flows: flows
+    expected_text: Home
+    network_source: proxy
+    network_sources:
+      - proxy
+    ui_snapshots: true
+    maestro_permitted: true
+    logcat_json: true
+    # The current hierarchy strategy replays marked smoke-flow prefixes after the main run.
+    # Keep this false for profiles whose actions are not safe to execute more than once.
+    allow_prefix_replay: true
+    capture:
+      settle_ms: 750
+      ui_snapshot_delay_ms: 800
+      ui_snapshot_min_interval_ms: 800
+    proxy:
+      listen_host: 0.0.0.0
+      port: 8080
+      # Empty means discovery mode: capture redacted traffic and list observed hosts.
+      # Add exact hosts or wildcard patterns after the first discovery run.
+      allowed_hosts: []
+
+# Copy and complete this profile for the restricted company app. Keep its
+# package ID private to your environment and enable hierarchy only after the
+# company confirms that text hierarchy dumps are permitted.
+# restricted_company_app:
+#   app_id: com.company.replace_me
+#   flows: flows
+#   expected_text: null
+#   network_source: proxy
+#   network_sources: [proxy, app_log, logcat]
+#   ui_snapshots: false
+#   maestro_permitted: false
+#   logcat_json: true
+#   capture:
+#     ui_snapshot_delay_ms: 800
+#     ui_snapshot_min_interval_ms: 800
+#   proxy:
+#     listen_host: 0.0.0.0
+#     port: 8080
+#     allowed_hosts: []

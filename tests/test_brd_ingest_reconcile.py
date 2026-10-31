@@ -65,13 +65,17 @@ class BrdIngestReconcileTests(unittest.TestCase):
         self.assertNotIn("BRD-02", master)
         self.assertEqual(second["coverage"]["sources"], 1)
 
-    def test_empty_source_folder_does_not_purge_inventory(self):
+    def test_empty_source_folder_archives_all_tracked_sources(self):
         _run_pipeline(self.root, self.vault, self.db)
         self.one.unlink()
         self.two.unlink()
-        self.assertEqual(_reconcile_missing_sources(self.root, self.vault, self.db, set()), [])
+        removed = _reconcile_missing_sources(self.root, self.vault, self.db, set())
+        self.assertEqual(len(removed), 2)
+        archived_notes = [note for item in removed for note in item["archived_notes"]]
+        self.assertTrue(archived_notes)
+        self.assertTrue(all((self.base / note).is_file() for note in archived_notes))
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0], 2)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM inventory").fetchone()[0], 0)
 
 
 if __name__ == "__main__":

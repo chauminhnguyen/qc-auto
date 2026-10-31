@@ -298,19 +298,28 @@ class FlowDiagramGenerator:
         apis = []
         for api in getattr(transition, "apis", []) or []:
             status = api.get("status")
+            safe_full = _safe_evidence_url(api.get("url") or "")
             apis.append({
                 "method": _safe_text(str(api.get("method") or "API")),
                 "url": _url_path(api.get("url") or ""),
+                "full_url": safe_full,
                 "status": status,
             })
-        destination = _url_path(getattr(transition, "to_url", "") or "")
+        destination = _url_path(getattr(transition, "to_url", "") or "") or "Not recorded"
+        destination_recorded = bool(_url_path(getattr(transition, "to_url", "") or ""))
         if detail and not apis and not ok:
             outcome += " · See the live-run report for details"
         return {
             "action": action_text or "Explored action",
+            "action_kind": kind,
+            "action_name": name,
+            "action_role": role,
+            "action_value": _safe_text(str(_redact_structured_value(getattr(action, "value", "") or ""))),
+            "action_dup_index": int(getattr(action, "dup_index", 0) or 0),
             "outcome": outcome,
             "source": _url_path(source_url),
             "destination": destination,
+            "destination_recorded": destination_recorded,
             "apis": apis,
         }
 
@@ -515,6 +524,15 @@ def _url_path(value: str | None) -> str:
     # Exclude query strings and fragments from the diagram to avoid leaking
     # identifiers or tokens that do not have sensitive-looking parameter names.
     return f"{parts.netloc}{parts.path}" if parts.netloc else parts.path or safe
+
+
+def _safe_evidence_url(value: str | None) -> str:
+    if not value:
+        return ""
+    parts = urlsplit(_redact_url(str(value)))
+    if parts.netloc:
+        return f"{parts.scheme or 'https'}://{parts.netloc}{parts.path}"
+    return parts.path
 
 
 def _page_key(value: str | None) -> str:
